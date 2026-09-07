@@ -24,7 +24,7 @@ jobs:
           unzip -qo native-source.zip
           test -f app/build.gradle
           test -f app/src/main/AndroidManifest.xml
-          sed -i 's/\.setInsetLeft(0);//g; s/\.setInsetRight(0);//g' app/src/main/java/in/nakhat/app/ui/CartAdapter.java
+          python3 -c "from pathlib import Path; p=Path('app/src/main/java/in/nakhat/app/ui/CartAdapter.java'); s=p.read_text(); s=s.replace('minus.setInsetLeft(0);minus.setInsetRight(0);','').replace('plus.setInsetLeft(0);plus.setInsetRight(0);',''); p.write_text(s)"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
