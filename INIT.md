@@ -1,0 +1,1 @@
+Initializing the Nakhat by Janhvi native Android application repository.
