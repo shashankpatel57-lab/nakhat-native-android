@@ -38,6 +38,23 @@ jobs:
           test -f app/src/main/java/in/nakhat/app/ui/WishlistFragment.java
           test -f app/src/main/res/drawable/ic_menu.xml
 
+      - name: Apply V3.1 visual polish and exact brand logo
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat overrides_v31/00 overrides_v31/01 > ui-v31.b64
+          test "$(wc -c < ui-v31.b64)" -eq 9260
+          base64 -d ui-v31.b64 > ui-v31.zip
+          unzip -t ui-v31.zip
+          unzip -qo ui-v31.zip
+          mkdir -p app/src/main/res/drawable-nodpi
+          curl --fail --location --retry 3 --connect-timeout 15 \
+            https://nakhat.in/assets/images/nakhat-logo.png \
+            -o app/src/main/res/drawable-nodpi/nakhat_brand_logo.png
+          test -s app/src/main/res/drawable-nodpi/nakhat_brand_logo.png
+          grep -q 'nakhat_brand_logo' app/src/main/AndroidManifest.xml
+          grep -q 'bottomDock' app/src/main/java/in/nakhat/app/MainActivity.java
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -68,19 +85,19 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-build-diagnostics-v3
+          name: android-build-diagnostics-v31
           path: android-build.log
           if-no-files-found: warn
           retention-days: 7
 
       - name: Rename APK
         shell: bash
-        run: cp app/build/outputs/apk/debug/app-debug.apk Nakhat-by-Janhvi-Native-V3.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Nakhat-by-Janhvi-Native-V3.1.apk
 
       - name: Upload native APK
         uses: actions/upload-artifact@v4
         with:
-          name: Nakhat-by-Janhvi-Native-V3-APK
-          path: Nakhat-by-Janhvi-Native-V3.apk
+          name: Nakhat-by-Janhvi-Native-V3.1-APK
+          path: Nakhat-by-Janhvi-Native-V3.1.apk
           if-no-files-found: error
           retention-days: 30
