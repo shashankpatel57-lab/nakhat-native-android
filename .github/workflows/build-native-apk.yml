@@ -17,7 +17,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat chunks/00 chunks/01 chunks/02 chunks/03 chunks/04 chunks/05a chunks/05b chunks/05c chunks/06 chunks/07 > native-source.b64
+          cat chunks/00 chunks/01 chunks/02 chunks/03 chunks/04 chunks/05a chunks/05b chunks/05c chunks/06a chunks/06b chunks/06c chunks/07 > native-source.b64
+          test "$(wc -c < native-source.b64)" -eq 42984
           base64 -d native-source.b64 > native-source.zip
           unzip -t native-source.zip
           unzip -qo native-source.zip
@@ -49,8 +50,7 @@ jobs:
 
       - name: Rename APK
         shell: bash
-        run: |
-          cp app/build/outputs/apk/debug/app-debug.apk Nakhat-by-Janhvi-Native-V2.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Nakhat-by-Janhvi-Native-V2.apk
 
       - name: Upload native APK
         uses: actions/upload-artifact@v4
