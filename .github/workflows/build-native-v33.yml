@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# V3.3 commerce build: website V3.7 compatible
 jobs:
   build-v33:
     runs-on: ubuntu-latest
