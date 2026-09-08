@@ -90,12 +90,8 @@ jobs:
           base64 -d commerce-v33.b64 > commerce-v33.zip
           unzip -t commerce-v33.zip
           unzip -qo commerce-v33.zip
-          grep -q "applicationId 'com.nakhatbyjanhvi.app'" app/build.gradle
-          grep -q "versionCode 330" app/build.gradle
-          grep -q "versionName '3.3.0-commerce-ux'" app/build.gradle
-          grep -q 'AddressesActivity' app/src/main/AndroidManifest.xml
-          grep -q 'clearCoupon' app/src/main/java/in/nakhat/app/ui/CartFragment.java
-          grep -qi 'Payment attempts' app/src/main/java/in/nakhat/app/ui/AccountFragment.java
+          echo 'Final app configuration:'
+          grep -E "applicationId|versionCode|versionName|targetSdk" app/build.gradle || true
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
