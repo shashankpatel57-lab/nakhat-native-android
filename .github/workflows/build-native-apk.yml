@@ -62,6 +62,37 @@ jobs:
           grep -q "allowBackup=\"false\"" app/src/main/AndroidManifest.xml
           grep -q "delete-account.php" app/src/main/java/in/nakhat/app/ui/AccountFragment.java
 
+      - name: Apply V3.2.1 Play package alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          s = s.replace("applicationId 'in.nakhat.app'", "applicationId 'com.nakhatbyjanhvi.app'")
+          s = s.replace('versionCode 320', 'versionCode 321')
+          s = s.replace("versionName '3.2.0-play-compliance'", "versionName '3.2.1-play-package-fix'")
+          p.write_text(s)
+
+          m = Path('app/src/main/AndroidManifest.xml')
+          x = m.read_text()
+          repl = {
+              'android:name=".NakhatApp"':'android:name="in.nakhat.app.NakhatApp"',
+              'android:name=".ui.OrderDetailActivity"':'android:name="in.nakhat.app.ui.OrderDetailActivity"',
+              'android:name=".ui.OrdersActivity"':'android:name="in.nakhat.app.ui.OrdersActivity"',
+              'android:name=".ui.CheckoutActivity"':'android:name="in.nakhat.app.ui.CheckoutActivity"',
+              'android:name=".ui.AuthActivity"':'android:name="in.nakhat.app.ui.AuthActivity"',
+              'android:name=".ui.ProductDetailActivity"':'android:name="in.nakhat.app.ui.ProductDetailActivity"',
+              'android:name=".MainActivity"':'android:name="in.nakhat.app.MainActivity"',
+          }
+          for a,b in repl.items(): x = x.replace(a,b)
+          m.write_text(x)
+          PY
+          grep -q "applicationId 'com.nakhatbyjanhvi.app'" app/build.gradle
+          grep -q "versionCode 321" app/build.gradle
+          grep -q 'android:name="in.nakhat.app.MainActivity"' app/src/main/AndroidManifest.xml
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -92,7 +123,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-build-diagnostics-v32
+          name: android-build-diagnostics-v321
           path: android-build.log
           if-no-files-found: warn
           retention-days: 7
@@ -100,15 +131,15 @@ jobs:
       - name: Prepare artifacts
         shell: bash
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk Nakhat-by-Janhvi-Native-V3.2-Play-Compliance.apk
-          cp app/build/outputs/bundle/release/app-release.aab Nakhat-by-Janhvi-Native-V3.2-Play-Compliance-UNSIGNED.aab
+          cp app/build/outputs/apk/debug/app-debug.apk Nakhat-by-Janhvi-Native-V3.2.1-Package-Fix.apk
+          cp app/build/outputs/bundle/release/app-release.aab Nakhat-by-Janhvi-Native-V3.2.1-Package-Fix-UNSIGNED.aab
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Nakhat-by-Janhvi-Native-V3.2-Play-Compliance
+          name: Nakhat-by-Janhvi-Native-V3.2.1-Package-Fix
           path: |
-            Nakhat-by-Janhvi-Native-V3.2-Play-Compliance.apk
-            Nakhat-by-Janhvi-Native-V3.2-Play-Compliance-UNSIGNED.aab
+            Nakhat-by-Janhvi-Native-V3.2.1-Package-Fix.apk
+            Nakhat-by-Janhvi-Native-V3.2.1-Package-Fix-UNSIGNED.aab
           if-no-files-found: error
           retention-days: 30
