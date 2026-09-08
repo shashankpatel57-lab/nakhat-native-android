@@ -1,0 +1,71 @@
+name: Extract Nakhat V3.3 Source
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat chunks/00 chunks/01 chunks/02 chunks/03 chunks/04 chunks/05a chunks/05b chunks/05c chunks/06a chunks/06b chunks/06c chunks/07 > native-source.b64
+          base64 -d native-source.b64 > native-source.zip
+          unzip -qo native-source.zip
+
+          cat overrides_v3/00 overrides_v3/01 overrides_v3/02 overrides_v3/03 overrides_v3/04 overrides_v3/05 overrides_v3/06 overrides_v3/07 > ui-v3.b64
+          base64 -d ui-v3.b64 > ui-v3.zip
+          unzip -qo ui-v3.zip
+
+          cat overrides_v31/00 overrides_v31/01 > ui-v31.b64
+          base64 -d ui-v31.b64 > ui-v31.zip
+          unzip -qo ui-v31.zip
+
+          cat overrides_play_v32/00 overrides_play_v32/01 > play-v32.b64
+          base64 -d play-v32.b64 > play-v32.zip
+          unzip -qo play-v32.zip
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          s = s.replace("applicationId 'in.nakhat.app'", "applicationId 'com.nakhatbyjanhvi.app'")
+          p.write_text(s)
+          m = Path('app/src/main/AndroidManifest.xml')
+          x = m.read_text()
+          repl = {
+            'android:name=".NakhatApp"':'android:name="in.nakhat.app.NakhatApp"',
+            'android:name=".ui.OrderDetailActivity"':'android:name="in.nakhat.app.ui.OrderDetailActivity"',
+            'android:name=".ui.OrdersActivity"':'android:name="in.nakhat.app.ui.OrdersActivity"',
+            'android:name=".ui.CheckoutActivity"':'android:name="in.nakhat.app.ui.CheckoutActivity"',
+            'android:name=".ui.AuthActivity"':'android:name="in.nakhat.app.ui.AuthActivity"',
+            'android:name=".ui.ProductDetailActivity"':'android:name="in.nakhat.app.ui.ProductDetailActivity"',
+            'android:name=".MainActivity"':'android:name="in.nakhat.app.MainActivity"',
+          }
+          for a,b in repl.items(): x = x.replace(a,b)
+          m.write_text(x)
+          PY
+
+          cat overrides_v33/00 overrides_v33/01 overrides_v33/02 overrides_v33/03 overrides_v33/04 overrides_v33/05 overrides_v33/06 overrides_v33/07 > commerce-v33.b64
+          base64 -d commerce-v33.b64 > commerce-v33.zip
+          unzip -qo commerce-v33.zip
+
+          mkdir -p extracted/app/src/main/java/in/nakhat/app/ui extracted/app/src/main/res/values extracted/app/src/main
+          cp app/src/main/java/in/nakhat/app/ui/AccountFragment.java extracted/app/src/main/java/in/nakhat/app/ui/
+          cp app/src/main/java/in/nakhat/app/MainActivity.java extracted/app/src/main/java/in/nakhat/app/
+          cp app/src/main/res/values/styles.xml extracted/app/src/main/res/values/
+          cp app/src/main/AndroidManifest.xml extracted/app/src/main/
+          cp app/build.gradle extracted/app/
+
+      - name: Upload extracted source
+        uses: actions/upload-artifact@v4
+        with:
+          name: nakhat-v33-extracted-source
+          path: extracted
+          retention-days: 2
