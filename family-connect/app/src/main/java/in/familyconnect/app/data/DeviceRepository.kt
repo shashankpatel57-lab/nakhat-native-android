@@ -1,4 +1,4 @@
-package in.familyconnect.app.data
+package com.familyconnect.app.data
 
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
@@ -9,7 +9,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Process
-import in.familyconnect.app.model.DeviceSnapshot
+import com.familyconnect.app.model.DeviceSnapshot
 
 object DeviceRepository {
     fun snapshot(context: Context): DeviceSnapshot {
