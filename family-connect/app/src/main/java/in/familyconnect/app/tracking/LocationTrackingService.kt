@@ -165,7 +165,10 @@ class LocationTrackingService : Service() {
 
     private fun checkPlaces(location: Location, speedKmh: Int) {
         val tracking = getSharedPreferences("tracking", MODE_PRIVATE)
-        AppPrefs.places(this).forEach { place ->
+        val myMemberId = AppPrefs.memberId(this)
+        AppPrefs.places(this)
+            .filter { it.watchMemberId == null || it.watchMemberId == myMemberId }
+            .forEach { place ->
             val target = Location(place.name).apply {
                 latitude = place.lat
                 longitude = place.lon
@@ -275,6 +278,7 @@ class LocationTrackingService : Service() {
                     motion = motion
                 ).getOrNull() ?: return@Thread
 
+                AppPrefs.replacePlaces(this, state.places)
                 val myId = AppPrefs.memberId(this)
                 val lastSeen = AppPrefs.lastSeenEventTime(this)
                 var newest = lastSeen
