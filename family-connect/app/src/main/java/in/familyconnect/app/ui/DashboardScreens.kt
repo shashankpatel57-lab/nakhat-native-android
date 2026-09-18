@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -39,6 +40,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,17 +50,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.familyconnect.app.ExternalDestinationShare
 import com.familyconnect.app.cloud.CloudMember
 import com.familyconnect.app.cloud.CloudState
 import com.familyconnect.app.cloud.FamilyCloud
 import com.familyconnect.app.model.DeviceSnapshot
 import com.familyconnect.app.state.AppPrefs
+import com.familyconnect.app.state.RoadRoute
 import com.familyconnect.app.state.SavedPlace
 import com.familyconnect.app.tracking.LocationTrackingService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
@@ -81,9 +88,75 @@ fun HomeDashboard(
     var tripRefresh by remember { mutableIntStateOf(0) }
     var routingBusy by remember { mutableStateOf(false) }
     var tripError by remember { mutableStateOf<String?>(null) }
+    val sharedMapText by ExternalDestinationShare.text.collectAsState()
+    var resolvedSharedPlace by remember { mutableStateOf<SavedPlace?>(null) }
+    var resolvingSharedPlace by remember { mutableStateOf(false) }
     val trip = remember(snapshot, tripRefresh) { AppPrefs.trip(context) }
     val places = cloud?.places ?: AppPrefs.places(context)
     val myId = AppPrefs.memberId(context)
+
+    val launchTrip: (SavedPlace) -> Unit = { place ->
+        tripError = null
+        val lat = snapshot.latitude
+        val lon = snapshot.longitude
+        if (lat == null || lon == null) {
+            if (!trackingEnabled) onToggleTracking()
+            tripError = "Waiting for a fresh GPS fix. Location sharing has been requested; try again in a few seconds."
+        } else {
+            routingBusy = true
+            if (!trackingEnabled) onToggleTracking()
+            scope.launch {
+                val routeResult = withContext(Dispatchers.IO) {
+                    FamilyCloud.roadRoute(context, lat, lon, place.lat, place.lon)
+                }
+                routeResult.onSuccess { route ->
+                    val routeSync = withContext(Dispatchers.IO) {
+                        FamilyCloud.setTripRoute(context, route)
+                    }
+                    if (routeSync.isSuccess) {
+                        AppPrefs.startTrip(context, place, route)
+                        ContextCompat.startForegroundService(context, Intent(context, LocationTrackingService::class.java))
+                        withContext(Dispatchers.IO) {
+                            FamilyCloud.publishEvent(
+                                context,
+                                "TRIP_STARTED",
+                                AppPrefs.profileName(context) + " started a trip",
+                                "Going to " + place.name + " • " +
+                                    if (route.distanceM < 1000f) route.distanceM.toInt().toString() + " m by road"
+                                    else "%.1f km by road".format(route.distanceM / 1000f) +
+                                    " • ETA " + ((route.durationS + 59) / 60).coerceAtLeast(1) + " min"
+                            )
+                        }
+                        tripRefresh++
+                        onRefresh()
+                    } else {
+                        tripError = routeSync.exceptionOrNull()?.message ?: "Route could not be shared with the family."
+                    }
+                }.onFailure {
+                    tripError = it.message ?: "Road route could not be calculated. Please try again."
+                }
+                routingBusy = false
+            }
+        }
+    }
+
+    LaunchedEffect(sharedMapText) {
+        val text = sharedMapText ?: return@LaunchedEffect
+        resolvingSharedPlace = true
+        val result = withContext(Dispatchers.IO) { FamilyCloud.resolveMapShare(context, text) }
+        resolvingSharedPlace = false
+        result.onSuccess { d ->
+            resolvedSharedPlace = SavedPlace(
+                id = "shared-" + System.currentTimeMillis(),
+                name = d.name,
+                lat = d.lat,
+                lon = d.lon
+            )
+        }.onFailure {
+            tripError = it.message ?: "Could not read the Google Maps location."
+            ExternalDestinationShare.consume()
+        }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -214,9 +287,20 @@ fun HomeDashboard(
                     max = trip.maxSpeed,
                     eta = trip.etaMinutes,
                     onEnd = {
+                        val destination = AppPrefs.trip(context).destinationName ?: "destination"
                         AppPrefs.stopTrip(context)
+                        scope.launch(Dispatchers.IO) {
+                            FamilyCloud.clearTripRoute(context)
+                            FamilyCloud.publishEvent(
+                                context,
+                                "TRIP_ENDED",
+                                AppPrefs.profileName(context) + " ended the trip",
+                                "Trip to " + destination + " was ended."
+                            )
+                        }
                         ContextCompat.startForegroundService(context, Intent(context, LocationTrackingService::class.java))
                         tripRefresh++
+                        onRefresh()
                     }
                 )
             }
@@ -317,34 +401,66 @@ fun HomeDashboard(
             onDismiss = { tripDialog = false },
             onStart = { place ->
                 tripDialog = false
-                tripError = null
-                val lat = snapshot.latitude
-                val lon = snapshot.longitude
-                if (lat == null || lon == null) {
-                    if (!trackingEnabled) onToggleTracking()
-                    tripError = "Current GPS location is not available yet. Location sharing has been requested; wait a few seconds and start the trip again."
-                } else {
-                    routingBusy = true
-                    if (!trackingEnabled) onToggleTracking()
-                    scope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            FamilyCloud.roadRoute(context, lat, lon, place.lat, place.lon)
-                        }
-                        routingBusy = false
-                        result.onSuccess { route ->
-                            AppPrefs.startTrip(context, place, route)
-                            ContextCompat.startForegroundService(context, Intent(context, LocationTrackingService::class.java))
-                            tripRefresh++
-                            onRefresh()
-                        }.onFailure {
-                            tripError = it.message ?: "Road route could not be calculated. Please try again."
-                        }
-                    }
-                }
+                launchTrip(place)
             },
             onNeedPlace = {
                 tripDialog = false
                 onOpenFamily()
+            },
+            onOpenGoogleMaps = {
+                tripDialog = false
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=")).apply {
+                    setPackage("com.google.android.apps.maps")
+                }
+                runCatching { context.startActivity(intent) }.onFailure {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://maps.google.com")))
+                }
+            }
+        )
+    }
+
+    if (resolvingSharedPlace) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Reading Google Maps place", fontWeight = FontWeight.Black) },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Getting the selected location…", color = Muted)
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    resolvedSharedPlace?.let { place ->
+        AlertDialog(
+            onDismissRequest = {
+                resolvedSharedPlace = null
+                ExternalDestinationShare.consume()
+            },
+            icon = { Icon(Icons.Default.Map, null, tint = Purple) },
+            title = { Text("Start trip to this place?", fontWeight = FontWeight.Black) },
+            text = {
+                Column {
+                    Text(place.name, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Selected from Google Maps sharing.", color = Muted, fontSize = 11.sp)
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    resolvedSharedPlace = null
+                    ExternalDestinationShare.consume()
+                    launchTrip(place)
+                }) { Text("Start trip") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    resolvedSharedPlace = null
+                    ExternalDestinationShare.consume()
+                }) { Text("Cancel") }
             }
         )
     }
