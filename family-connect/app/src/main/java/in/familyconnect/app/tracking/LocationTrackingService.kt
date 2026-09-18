@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
+import android.os.BatteryManager
 import android.os.IBinder
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -19,6 +20,7 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.familyconnect.app.MainActivity
 import com.familyconnect.app.R
+import com.familyconnect.app.cloud.FamilyCloud
 import com.familyconnect.app.state.AppPrefs
 import kotlin.math.roundToInt
 
@@ -28,6 +30,7 @@ class LocationTrackingService : Service() {
     private var overspeedSent = false
     private var lastAccepted: Location? = null
     private val speedSamples = ArrayDeque<Float>()
+    @Volatile private var cloudSyncRunning = false
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -65,6 +68,7 @@ class LocationTrackingService : Service() {
             checkPlaces(l, speed)
             validateSpeed(speed)
             updateNotification(speed)
+            syncCloudAsync(l, speed)
             lastAccepted = l
         }
     }
@@ -151,7 +155,7 @@ class LocationTrackingService : Service() {
         if (remaining <= 180f && !prefs.getBoolean("trip_arrived_alert", false)) {
             val name = prefs.getString("trip_dest_name", "destination") ?: "destination"
             val body = "Trip completed • max " + maxSpeed + " km/h • average " + avg.coerceAtLeast(0) + " km/h"
-            notifyEvent(7411, "Arrived at " + name, body)
+            notifyEvent(7411, "TRIP_ARRIVED", "Arrived at " + name, body)
             prefs.edit()
                 .putBoolean("trip_arrived_alert", true)
                 .putBoolean("trip_active", false)
@@ -174,14 +178,15 @@ class LocationTrackingService : Service() {
             val isInside = distance <= place.radiusM
 
             if (!wasInside && isInside) {
-                notifyEvent(7600 + (place.id.hashCode() and 0x3FF), place.name + " reached", "Arrived at " + place.name)
+                notifyEvent(7600 + (place.id.hashCode() and 0x3FF), "PLACE_ENTER", place.name + " reached", "Arrived at " + place.name)
             }
             if (wasInside && distance > place.radiusM + 80f) {
-                notifyEvent(7700 + (place.id.hashCode() and 0x3FF), "Left " + place.name, "Left " + place.name)
+                notifyEvent(7700 + (place.id.hashCode() and 0x3FF), "PLACE_EXIT", "Left " + place.name, "Left " + place.name)
             }
             if (!wasNear && distance <= 1000f && distance > place.radiusM && speedKmh >= 5) {
                 notifyEvent(
                     7800 + (place.id.hashCode() and 0x3FF),
+                    "PLACE_APPROACH",
                     "Approaching " + place.name,
                     "Approximately " + "%.1f".format(distance / 1000f) + " km away"
                 )
@@ -200,7 +205,7 @@ class LocationTrackingService : Service() {
             if (overSince == 0L) overSince = System.currentTimeMillis()
             if (!overspeedSent && System.currentTimeMillis() - overSince >= 10_000L) {
                 overspeedSent = true
-                notifyEvent(7302, "Speed alert", "Estimated speed is " + speed + " km/h, above your " + threshold + " km/h family threshold.")
+                notifyEvent(7302, "OVERSPEED", "Speed alert", "Estimated speed is " + speed + " km/h, above your " + threshold + " km/h family threshold.")
             }
         } else if (speed < threshold - 5) {
             overSince = 0L
@@ -230,7 +235,14 @@ class LocationTrackingService : Service() {
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(7301, trackingNotification(speed))
     }
 
-    private fun notifyEvent(id: Int, title: String, body: String) {
+    private fun notifyEvent(id: Int, type: String, title: String, body: String) {
+        showAlert(id, title, body)
+        Thread {
+            FamilyCloud.publishEvent(this, type, title, body)
+        }.start()
+    }
+
+    private fun showAlert(id: Int, title: String, body: String) {
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(
             id,
             NotificationCompat.Builder(this, "family_alerts")
@@ -241,6 +253,43 @@ class LocationTrackingService : Service() {
                 .setAutoCancel(true)
                 .build()
         )
+    }
+
+    private fun syncCloudAsync(location: Location, speed: Int) {
+        if (cloudSyncRunning || !AppPrefs.setupComplete(this)) return
+        cloudSyncRunning = true
+        val settings = getSharedPreferences("settings", MODE_PRIVATE)
+        val shareSpeed = settings.getBoolean("share_speed", true)
+        val shareBattery = settings.getBoolean("share_battery", true)
+        val motion = getSharedPreferences("tracking", MODE_PRIVATE).getString("motion", "Unknown") ?: "Unknown"
+        val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
+        val battery = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100)
+        Thread {
+            try {
+                val state = FamilyCloud.syncMyState(
+                    context = this,
+                    lat = location.latitude,
+                    lon = location.longitude,
+                    speed = if (shareSpeed) speed else 0,
+                    battery = if (shareBattery) battery else -1,
+                    motion = motion
+                ).getOrNull() ?: return@Thread
+
+                val myId = AppPrefs.memberId(this)
+                val lastSeen = AppPrefs.lastSeenEventTime(this)
+                var newest = lastSeen
+                state.events
+                    .filter { it.memberId != myId && it.createdAt > lastSeen }
+                    .sortedBy { it.createdAt }
+                    .forEach { event ->
+                        showAlert(8200 + (event.id.hashCode() and 0x3FF), event.title, event.memberName + " • " + event.body)
+                        if (event.createdAt > newest) newest = event.createdAt
+                    }
+                if (newest > lastSeen) AppPrefs.setLastSeenEventTime(this, newest)
+            } finally {
+                cloudSyncRunning = false
+            }
+        }.start()
     }
 
     private fun createChannels() {
