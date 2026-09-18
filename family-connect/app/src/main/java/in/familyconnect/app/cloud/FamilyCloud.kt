@@ -47,7 +47,8 @@ data class CloudEvent(
 data class CloudState(
     val familyName: String,
     val members: List<CloudMember>,
-    val events: List<CloudEvent>
+    val events: List<CloudEvent>,
+    val places: List<SavedPlace>
 )
 
 object FamilyCloud {
@@ -63,6 +64,7 @@ object FamilyCloud {
             .put("familyName", familyName.trim())
             .put("members", JSONArray().put(baseMember(memberId, personName.trim())))
             .put("events", JSONArray())
+            .put("places", JSONArray())
 
         val envelope = JSONObject().put("data", encrypt(state.toString(), key))
         val connection = open(BASE, "POST")
@@ -176,6 +178,56 @@ object FamilyCloud {
         putRoot(blobId, key, root)
     }
 
+
+    fun upsertPlace(context: Context, place: SavedPlace): Result<CloudState> = runCatching {
+        val blobId = AppPrefs.cloudBlobId(context)
+        val keyB64 = AppPrefs.cloudKey(context)
+        require(blobId.isNotBlank() && keyB64.isNotBlank()) { "Family cloud is not configured" }
+        val key = Base64.decode(keyB64, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        val root = fetchRoot(blobId, key)
+        val current = root.optJSONArray("places") ?: JSONArray()
+        val next = JSONArray()
+        var replaced = false
+        for (i in 0 until current.length()) {
+            val o = current.optJSONObject(i) ?: continue
+            if (o.optString("id") == place.id) {
+                next.put(placeJson(place))
+                replaced = true
+            } else {
+                next.put(o)
+            }
+        }
+        if (!replaced) next.put(placeJson(place))
+        root.put("places", next)
+        putRoot(blobId, key, root)
+        parseState(root)
+    }
+
+    fun deletePlace(context: Context, placeId: String): Result<CloudState> = runCatching {
+        val blobId = AppPrefs.cloudBlobId(context)
+        val keyB64 = AppPrefs.cloudKey(context)
+        require(blobId.isNotBlank() && keyB64.isNotBlank()) { "Family cloud is not configured" }
+        val key = Base64.decode(keyB64, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        val root = fetchRoot(blobId, key)
+        val current = root.optJSONArray("places") ?: JSONArray()
+        val next = JSONArray()
+        for (i in 0 until current.length()) {
+            val o = current.optJSONObject(i) ?: continue
+            if (o.optString("id") != placeId) next.put(o)
+        }
+        root.put("places", next)
+        putRoot(blobId, key, root)
+        parseState(root)
+    }
+
+    private fun placeJson(place: SavedPlace): JSONObject = JSONObject()
+        .put("id", place.id)
+        .put("name", place.name)
+        .put("lat", place.lat)
+        .put("lon", place.lon)
+        .put("radius", place.radiusM.toDouble())
+        .put("watchMemberId", place.watchMemberId ?: JSONObject.NULL)
+
     private fun baseMember(id: String, name: String): JSONObject = JSONObject()
         .put("id", id)
         .put("name", name)
@@ -247,7 +299,23 @@ object FamilyCloud {
                 )
             }
         }
-        return CloudState(root.optString("familyName", "Family"), members, events)
+        val placesJson = root.optJSONArray("places") ?: JSONArray()
+        val places = buildList {
+            for (i in 0 until placesJson.length()) {
+                val p = placesJson.optJSONObject(i) ?: continue
+                add(
+                    SavedPlace(
+                        id = p.optString("id"),
+                        name = p.optString("name", "Place"),
+                        lat = p.optDouble("lat"),
+                        lon = p.optDouble("lon"),
+                        radiusM = p.optDouble("radius", 180.0).toFloat(),
+                        watchMemberId = nullableString(p, "watchMemberId")
+                    )
+                )
+            }
+        }
+        return CloudState(root.optString("familyName", "Family"), members, events, places)
     }
 
     private fun nullableDouble(o: JSONObject, key: String): Double? =
