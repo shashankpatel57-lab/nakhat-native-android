@@ -136,9 +136,9 @@ class LocationTrackingService : Service() {
         if (previous != null) {
             val dtSec = ((current.time - previous.time) / 1000L).coerceIn(0L, 30L)
             val segment = previous.distanceTo(current)
-            if (segment in 1f..500f && dtSec > 0) {
+            if (segment in 1f..500f && dtSec > 0 && speedKmh >= 3) {
                 totalDistanceTravelled += segment
-                if (speedKmh >= 3) movingSeconds += dtSec
+                movingSeconds += dtSec
             }
         }
 
