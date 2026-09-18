@@ -23,6 +23,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -75,8 +76,11 @@ fun HomeDashboard(
     onOpenFamily: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var tripDialog by remember { mutableStateOf(false) }
     var tripRefresh by remember { mutableIntStateOf(0) }
+    var routingBusy by remember { mutableStateOf(false) }
+    var tripError by remember { mutableStateOf<String?>(null) }
     val trip = remember(snapshot, tripRefresh) { AppPrefs.trip(context) }
     val places = cloud?.places ?: AppPrefs.places(context)
     val myId = AppPrefs.memberId(context)
@@ -105,6 +109,34 @@ fun HomeDashboard(
                         }
                         IconButton(onClick = onRefresh) {
                             Icon(Icons.Default.Refresh, "Refresh")
+                        }
+                    }
+                }
+            }
+        }
+
+        tripError?.let { message ->
+            item {
+                Surface(color = RoseSoft, shape = RoundedCornerShape(16.dp)) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Route, null, tint = Rose)
+                        Spacer(Modifier.width(9.dp))
+                        Text(message, color = Color(0xFF8E2B3D), fontSize = 11.sp, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { tripError = null }) { Icon(Icons.Default.Close, "Dismiss") }
+                    }
+                }
+            }
+        }
+
+        if (routingBusy) {
+            item {
+                Surface(color = PurpleSoft, shape = RoundedCornerShape(16.dp)) {
+                    Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text("Calculating road route", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("Getting drivable path, road distance and ETA…", color = Muted, fontSize = 10.sp)
                         }
                     }
                 }
@@ -284,10 +316,31 @@ fun HomeDashboard(
             places = places,
             onDismiss = { tripDialog = false },
             onStart = { place ->
-                AppPrefs.startTrip(context, place)
-                ContextCompat.startForegroundService(context, Intent(context, LocationTrackingService::class.java))
                 tripDialog = false
-                tripRefresh++
+                tripError = null
+                val lat = snapshot.latitude
+                val lon = snapshot.longitude
+                if (lat == null || lon == null) {
+                    if (!trackingEnabled) onToggleTracking()
+                    tripError = "Current GPS location is not available yet. Location sharing has been requested; wait a few seconds and start the trip again."
+                } else {
+                    routingBusy = true
+                    if (!trackingEnabled) onToggleTracking()
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            FamilyCloud.roadRoute(context, lat, lon, place.lat, place.lon)
+                        }
+                        routingBusy = false
+                        result.onSuccess { route ->
+                            AppPrefs.startTrip(context, place, route)
+                            ContextCompat.startForegroundService(context, Intent(context, LocationTrackingService::class.java))
+                            tripRefresh++
+                            onRefresh()
+                        }.onFailure {
+                            tripError = it.message ?: "Road route could not be calculated. Please try again."
+                        }
+                    }
+                }
             },
             onNeedPlace = {
                 tripDialog = false
@@ -315,8 +368,8 @@ private fun ActiveTripCard(
                 Text("Travelling to", color = Muted, fontSize = 10.sp)
                 Text(destination, fontWeight = FontWeight.Black, fontSize = 17.sp)
                 Text(
-                    (remainingM?.let { if (it < 1000f) it.toInt().toString() + " m remaining" else "%.1f km remaining".format(it / 1000f) } ?: "Calculating distance") +
-                        (eta?.let { " • ETA " + it + " min" } ?: ""),
+                    (remainingM?.let { if (it < 1000f) it.toInt().toString() + " m by road" else "%.1f km by road".format(it / 1000f) } ?: "Calculating road distance") +
+                        (eta?.let { " • Road ETA " + it + " min" } ?: ""),
                     color = Muted,
                     fontSize = 10.5.sp
                 )
