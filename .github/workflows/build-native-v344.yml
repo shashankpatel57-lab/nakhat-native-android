@@ -1,0 +1,243 @@
+name: Build Nakhat Native Android V3.4.4
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'overrides_v344/**'
+      - '.github/workflows/build-native-v344.yml'
+      - 'patches/v342/**'
+      - 'patches/v34/**'
+      - 'overrides_v33/**'
+  workflow_dispatch:
+
+jobs:
+  build-v344:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore native Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat chunks/00 chunks/01 chunks/02 chunks/03 chunks/04 chunks/05a chunks/05b chunks/05c chunks/06a chunks/06b chunks/06c chunks/07 > native-source.b64
+          base64 -d native-source.b64 > native-source.zip
+          unzip -qo native-source.zip
+
+      - name: Apply native shopping UI V3
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat overrides_v3/00 overrides_v3/01 overrides_v3/02 overrides_v3/03 overrides_v3/04 overrides_v3/05 overrides_v3/06 overrides_v3/07 > ui-v3.b64
+          base64 -d ui-v3.b64 > ui-v3.zip
+          unzip -qo ui-v3.zip
+
+      - name: Apply V3.1 visual polish
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat overrides_v31/00 overrides_v31/01 > ui-v31.b64
+          base64 -d ui-v31.b64 > ui-v31.zip
+          unzip -qo ui-v31.zip
+          mkdir -p app/src/main/res/drawable-nodpi
+          curl --fail --location --retry 3 --connect-timeout 15 https://nakhat.in/assets/images/nakhat-logo.png -o app/src/main/res/drawable-nodpi/nakhat_brand_logo.png
+          test -s app/src/main/res/drawable-nodpi/nakhat_brand_logo.png
+
+      - name: Apply V3.2 Google Play compliance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat overrides_play_v32/00 overrides_play_v32/01 > play-v32.b64
+          base64 -d play-v32.b64 > play-v32.zip
+          unzip -qo play-v32.zip
+
+      - name: Align Play package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/build.gradle')
+          s = p.read_text().replace("applicationId 'in.nakhat.app'", "applicationId 'com.nakhatbyjanhvi.app'")
+          p.write_text(s)
+          m = Path('app/src/main/AndroidManifest.xml')
+          x = m.read_text()
+          repl = {
+            'android:name=".NakhatApp"':'android:name="in.nakhat.app.NakhatApp"',
+            'android:name=".ui.OrderDetailActivity"':'android:name="in.nakhat.app.ui.OrderDetailActivity"',
+            'android:name=".ui.OrdersActivity"':'android:name="in.nakhat.app.ui.OrdersActivity"',
+            'android:name=".ui.CheckoutActivity"':'android:name="in.nakhat.app.ui.CheckoutActivity"',
+            'android:name=".ui.AuthActivity"':'android:name="in.nakhat.app.ui.AuthActivity"',
+            'android:name=".ui.ProductDetailActivity"':'android:name="in.nakhat.app.ui.ProductDetailActivity"',
+            'android:name=".MainActivity"':'android:name="in.nakhat.app.MainActivity"',
+          }
+          for a,b in repl.items(): x = x.replace(a,b)
+          m.write_text(x)
+          PY
+
+      - name: Apply V3.3 commerce UX
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat overrides_v33/00 overrides_v33/01 overrides_v33/02 overrides_v33/03 overrides_v33/04 overrides_v33/05 overrides_v33/06 overrides_v33/07 > commerce-v33.b64
+          base64 -d commerce-v33.b64 > commerce-v33.zip
+          unzip -qo commerce-v33.zip
+
+      - name: Apply V3.4 account UI polish
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp patches/v34/AccountFragment.java app/src/main/java/in/nakhat/app/ui/AccountFragment.java
+
+      - name: Apply V3.4.3 frequency-controlled notification banner
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp patches/v342/MainActivity.java app/src/main/java/in/nakhat/app/MainActivity.java
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/in/nakhat/app/MainActivity.java')
+          s = p.read_text()
+          old = '''            SharedPreferences prefs = getSharedPreferences("nakhat_daily_notice", MODE_PRIVATE);
+            String marker = key + "|" + indiaDay();
+            if (marker.equals(prefs.getString("last_seen_marker", ""))) return;
+
+            // Mark as seen when it is displayed, so navigating/reopening during the
+            // same day does not keep interrupting the customer.
+            prefs.edit().putString("last_seen_marker", marker).apply();
+            showNotificationBanner(n);'''
+          new = '''            String frequency = n.optString("frequency", "once_per_day").trim();
+            boolean everyVisit = "every_visit".equals(frequency);
+
+            if (!everyVisit) {
+                SharedPreferences prefs = getSharedPreferences("nakhat_daily_notice", MODE_PRIVATE);
+                String marker = key + "|" + indiaDay();
+                if (marker.equals(prefs.getString("last_seen_marker", ""))) return;
+                prefs.edit().putString("last_seen_marker", marker).apply();
+            }
+
+            showNotificationBanner(n);'''
+          if old not in s:
+              raise SystemExit('Expected V3.4.2 notification block not found')
+          p.write_text(s.replace(old, new))
+          PY
+
+      - name: Apply V3.4.4 resilient DNS and network stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat overrides_v344/00 > network-v344.b64
+          base64 -d network-v344.b64 > network-v344.zip
+          unzip -t network-v344.zip
+          unzip -qo network-v344.zip
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          needle = "    implementation 'com.razorpay:checkout:1.6.41'\n"
+          deps = (
+              needle +
+              "    implementation 'com.squareup.okhttp3:okhttp:4.12.0'\n"
+              "    implementation 'com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0'\n"
+              "    implementation 'com.github.bumptech.glide:okhttp3-integration:4.16.0'\n"
+              "    annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'\n"
+          )
+          if "okhttp-dnsoverhttps" not in s:
+              if needle not in s:
+                  raise SystemExit('Dependency insertion point not found')
+              s = s.replace(needle, deps)
+
+          s = re.sub(r'versionCode\s+\d+', 'versionCode 344', s)
+          s = re.sub(r"versionName\s+'[^']+'", "versionName '3.4.4-network-resilience'", s)
+          s = re.sub(r"applicationId\s+'[^']+'", "applicationId 'com.nakhatbyjanhvi.app'", s)
+          p.write_text(s)
+
+          m = Path('app/src/main/AndroidManifest.xml')
+          x = m.read_text()
+          x = re.sub(r'android:label="[^"]*"', 'android:label="Nakhat"', x, count=1)
+          m.write_text(x)
+          PY
+
+          grep -q 'okhttp-dnsoverhttps:4.12.0' app/build.gradle
+          grep -q 'okhttp3-integration:4.16.0' app/build.gradle
+          grep -q 'versionCode 344' app/build.gradle
+          grep -q "versionName '3.4.4-network-resilience'" app/build.gradle
+          grep -q 'DnsOverHttps' app/src/main/java/in/nakhat/app/api/NetworkStack.java
+          grep -q 'NakhatGlideModule' app/src/main/java/in/nakhat/app/NakhatGlideModule.java
+          grep -q 'android:label="Nakhat"' app/src/main/AndroidManifest.xml
+
+      - name: DNS and HTTPS diagnostics
+        shell: bash
+        run: |
+          {
+            echo "=== UTC $(date -u +%FT%TZ) ==="
+            echo "--- A/AAAA: nakhat.in ---"
+            getent ahosts nakhat.in || true
+            echo "--- A/AAAA: www.nakhat.in ---"
+            getent ahosts www.nakhat.in || true
+            echo "--- HTTPS apex health ---"
+            curl -sS -o /dev/null -w 'HTTP %{http_code} remote=%{remote_ip} redirects=%{num_redirects}\n' --connect-timeout 10 --max-time 20 https://nakhat.in/api/mobile/v1/health.php || true
+            echo "--- HTTPS www health ---"
+            curl -sS -o /dev/null -w 'HTTP %{http_code} remote=%{remote_ip} redirects=%{num_redirects}\n' --connect-timeout 10 --max-time 20 https://www.nakhat.in/api/mobile/v1/health.php || true
+          } | tee dns-diagnostic-v344.txt
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 36
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Build V3.4.4 APK and AAB
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle :app:assembleDebug :app:assembleRelease :app:bundleRelease --stacktrace --no-daemon 2>&1 | tee android-build-v344.log
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk Nakhat-V3.4.4-NETWORK-RESILIENCE-DEBUG.apk
+          cp app/build/outputs/apk/release/app-release-unsigned.apk Nakhat-V3.4.4-NETWORK-RESILIENCE-UNSIGNED.apk
+          cp app/build/outputs/bundle/release/app-release.aab Nakhat-V3.4.4-NETWORK-RESILIENCE-UNSIGNED.aab
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-diagnostics-v344
+          path: |
+            android-build-v344.log
+            dns-diagnostic-v344.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload V3.4.4 Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nakhat-Native-V3.4.4-Network-Resilience
+          path: |
+            Nakhat-V3.4.4-NETWORK-RESILIENCE-DEBUG.apk
+            Nakhat-V3.4.4-NETWORK-RESILIENCE-UNSIGNED.apk
+            Nakhat-V3.4.4-NETWORK-RESILIENCE-UNSIGNED.aab
+          if-no-files-found: error
+          retention-days: 30
