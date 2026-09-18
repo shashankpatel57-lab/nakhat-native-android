@@ -12,16 +12,12 @@ import android.os.BatteryManager
 import android.os.IBinder
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import com.familyconnect.app.MainActivity
 import com.familyconnect.app.R
 import com.familyconnect.app.cloud.FamilyCloud
 import com.familyconnect.app.state.AppPrefs
+import com.familyconnect.app.state.RoutePoint
+import com.google.android.gms.location.*
 import kotlin.math.roundToInt
 
 class LocationTrackingService : Service() {
@@ -31,6 +27,7 @@ class LocationTrackingService : Service() {
     private var lastAccepted: Location? = null
     private val speedSamples = ArrayDeque<Float>()
     @Volatile private var cloudSyncRunning = false
+    @Volatile private var rerouteRunning = false
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -81,6 +78,7 @@ class LocationTrackingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(7301, trackingNotification(0))
+
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
             ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             stopSelf()
@@ -88,10 +86,10 @@ class LocationTrackingService : Service() {
         }
 
         val trip = AppPrefs.trip(this)
-        val interval = if (trip.active) 4000L else 8000L
+        val interval = if (trip.active) 3500L else 8000L
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, interval)
-            .setMinUpdateIntervalMillis(if (trip.active) 2500L else 4500L)
-            .setMaxUpdateDelayMillis(if (trip.active) 7000L else 15000L)
+            .setMinUpdateIntervalMillis(if (trip.active) 2200L else 4500L)
+            .setMaxUpdateDelayMillis(if (trip.active) 5500L else 15000L)
             .build()
 
         try {
@@ -104,63 +102,167 @@ class LocationTrackingService : Service() {
     }
 
     private fun updateTrip(current: Location, previous: Location?, speedKmh: Int) {
+        val trip = AppPrefs.trip(this)
+        if (!trip.active || trip.destinationLat == null || trip.destinationLon == null) return
+
         val prefs = getSharedPreferences("family_connect_state", MODE_PRIVATE)
-        if (!prefs.getBoolean("trip_active", false)) return
-        if (!prefs.contains("trip_dest_lat") || !prefs.contains("trip_dest_lon")) return
-
-        val destLat = java.lang.Double.longBitsToDouble(prefs.getLong("trip_dest_lat", 0L))
-        val destLon = java.lang.Double.longBitsToDouble(prefs.getLong("trip_dest_lon", 0L))
         val destination = Location("destination").apply {
-            latitude = destLat
-            longitude = destLon
+            latitude = trip.destinationLat
+            longitude = trip.destinationLon
         }
-        val remaining = current.distanceTo(destination)
-        val maxSpeed = maxOf(prefs.getInt("trip_max", 0), speedKmh)
+        val arrivalDistance = current.distanceTo(destination)
 
-        var totalDistance = prefs.getFloat("trip_distance_m", 0f)
+        var totalDistanceTravelled = prefs.getFloat("trip_distance_m", 0f)
         var movingSeconds = prefs.getLong("trip_moving_seconds", 0L)
         if (previous != null) {
             val dtSec = ((current.time - previous.time) / 1000L).coerceIn(0L, 30L)
             val segment = previous.distanceTo(current)
             if (segment in 1f..500f && dtSec > 0) {
-                totalDistance += segment
+                totalDistanceTravelled += segment
                 if (speedKmh >= 3) movingSeconds += dtSec
             }
         }
-        val avg = if (movingSeconds > 0) ((totalDistance / movingSeconds) * 3.6f).roundToInt() else speedKmh
-        val referenceSpeed = when {
-            speedKmh >= 8 -> speedKmh
-            avg >= 8 -> avg
-            else -> 0
+
+        val avg = if (movingSeconds > 0) {
+            ((totalDistanceTravelled / movingSeconds) * 3.6f).roundToInt().coerceAtLeast(0)
+        } else speedKmh
+        val maxSpeed = maxOf(trip.maxSpeed, speedKmh)
+
+        val progress = roadProgress(current, trip.routePoints)
+        val remainingRoad = progress?.remainingM ?: trip.remainingM
+        val offRouteM = progress?.distanceFromRouteM ?: Float.MAX_VALUE
+
+        val routeDistance = trip.routeDistanceM
+        val routeDuration = trip.routeDurationS
+        val roadEtaMin = if (remainingRoad != null && routeDistance != null && routeDistance > 0f &&
+            routeDuration != null && routeDuration > 0) {
+            ((routeDuration * (remainingRoad / routeDistance)) / 60f).roundToInt().coerceAtLeast(1)
+        } else {
+            val referenceSpeed = when {
+                avg >= 8 -> avg
+                speedKmh >= 8 -> speedKmh
+                else -> 0
+            }
+            if (remainingRoad != null && referenceSpeed > 0) {
+                ((remainingRoad / 1000f) / referenceSpeed * 60f).roundToInt().coerceAtLeast(1)
+            } else -1
         }
-        val eta = if (referenceSpeed > 0) ((remaining / 1000f) / referenceSpeed * 60f).roundToInt().coerceAtLeast(1) else -1
+
+        progress?.index?.let { prefs.edit().putInt("trip_route_index", it).apply() }
 
         prefs.edit()
             .putInt("trip_current", speedKmh)
             .putInt("trip_max", maxSpeed)
-            .putInt("trip_avg", avg.coerceAtLeast(0))
-            .putFloat("trip_remaining", remaining)
-            .putFloat("trip_distance_m", totalDistance)
+            .putInt("trip_avg", avg)
+            .putFloat("trip_distance_m", totalDistanceTravelled)
             .putLong("trip_moving_seconds", movingSeconds)
-            .putInt("trip_eta", eta)
+            .apply {
+                if (remainingRoad != null) putFloat("trip_remaining", remainingRoad)
+                if (roadEtaMin >= 0) putInt("trip_eta", roadEtaMin)
+            }
             .apply()
 
-        if (remaining <= 1000f && remaining > 220f && !prefs.getBoolean("trip_1km_alert", false)) {
-            val destinationName = prefs.getString("trip_dest_name", "destination") ?: "destination"
-            val body = "About " + "%.1f".format(remaining / 1000f) + " km remaining" + if (eta > 0) " • ETA " + eta + " min" else ""
+        val now = System.currentTimeMillis()
+        val shouldReroute = trip.routePoints.size < 2 ||
+            (offRouteM > 300f && now - trip.lastRerouteAt > 45_000L) ||
+            (now - trip.lastRerouteAt > 10 * 60_000L)
+
+        if (shouldReroute) requestReroute(current, trip.destinationLat, trip.destinationLon)
+
+        val latest = AppPrefs.trip(this)
+        val remainingForAlert = latest.remainingM
+        if (remainingForAlert != null &&
+            remainingForAlert <= 1000f && remainingForAlert > 220f &&
+            !prefs.getBoolean("trip_1km_alert", false)) {
+            val destinationName = latest.destinationName ?: "destination"
+            val body = "About " + "%.1f".format(remainingForAlert / 1000f) +
+                " km by road remaining" +
+                (latest.etaMinutes?.let { " • ETA " + it + " min" } ?: "")
             notifyEvent(7410, "TRIP_APPROACHING", "Approaching " + destinationName, body)
             prefs.edit().putBoolean("trip_1km_alert", true).apply()
         }
 
-        if (remaining <= 180f && !prefs.getBoolean("trip_arrived_alert", false)) {
-            val name = prefs.getString("trip_dest_name", "destination") ?: "destination"
-            val body = "Trip completed • max " + maxSpeed + " km/h • average " + avg.coerceAtLeast(0) + " km/h"
+        if (arrivalDistance <= 180f && !prefs.getBoolean("trip_arrived_alert", false)) {
+            val name = latest.destinationName ?: "destination"
+            val body = "Trip completed • max " + maxSpeed + " km/h • average " + avg + " km/h"
             notifyEvent(7411, "TRIP_ARRIVED", "Arrived at " + name, body)
-            prefs.edit()
-                .putBoolean("trip_arrived_alert", true)
-                .putBoolean("trip_active", false)
-                .apply()
+            AppPrefs.stopTrip(this)
         }
+    }
+
+    private data class RoadProgress(
+        val index: Int,
+        val remainingM: Float,
+        val distanceFromRouteM: Float
+    )
+
+    private fun roadProgress(current: Location, route: List<RoutePoint>): RoadProgress? {
+        if (route.size < 2) return null
+        val prefs = getSharedPreferences("family_connect_state", MODE_PRIVATE)
+        val lastIndex = prefs.getInt("trip_route_index", 0).coerceIn(0, route.lastIndex)
+
+        var bestIndex = lastIndex
+        var bestDistance = Float.MAX_VALUE
+
+        val localStart = (lastIndex - 8).coerceAtLeast(0)
+        val localEnd = (lastIndex + 120).coerceAtMost(route.lastIndex)
+        for (i in localStart..localEnd) {
+            val d = distance(current.latitude, current.longitude, route[i].lat, route[i].lon)
+            if (d < bestDistance) {
+                bestDistance = d
+                bestIndex = i
+            }
+        }
+
+        if (bestDistance > 900f) {
+            for (i in route.indices step 3) {
+                val d = distance(current.latitude, current.longitude, route[i].lat, route[i].lon)
+                if (d < bestDistance) {
+                    bestDistance = d
+                    bestIndex = i
+                }
+            }
+        }
+
+        var remaining = bestDistance.coerceAtMost(1000f)
+        for (i in bestIndex until route.lastIndex) {
+            remaining += distance(route[i].lat, route[i].lon, route[i + 1].lat, route[i + 1].lon)
+        }
+        return RoadProgress(bestIndex, remaining, bestDistance)
+    }
+
+    private fun distance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
+        val out = FloatArray(1)
+        Location.distanceBetween(lat1, lon1, lat2, lon2, out)
+        return out[0]
+    }
+
+    private fun requestReroute(current: Location, destLat: Double, destLon: Double) {
+        if (rerouteRunning) return
+        rerouteRunning = true
+        Thread {
+            try {
+                val route = FamilyCloud.roadRoute(
+                    this,
+                    current.latitude,
+                    current.longitude,
+                    destLat,
+                    destLon
+                ).getOrNull()
+                if (route != null) {
+                    AppPrefs.updateTripRoute(this, route)
+                    getSharedPreferences("family_connect_state", MODE_PRIVATE).edit()
+                        .putInt("trip_route_index", 0)
+                        .apply()
+                } else {
+                    getSharedPreferences("family_connect_state", MODE_PRIVATE).edit()
+                        .putLong("trip_last_reroute", System.currentTimeMillis())
+                        .apply()
+                }
+            } finally {
+                rerouteRunning = false
+            }
+        }.start()
     }
 
     private fun checkPlaces(location: Location, speedKmh: Int) {
@@ -169,37 +271,47 @@ class LocationTrackingService : Service() {
         AppPrefs.places(this)
             .filter { it.watchMemberId == null || it.watchMemberId == myMemberId }
             .forEach { place ->
-            val target = Location(place.name).apply {
-                latitude = place.lat
-                longitude = place.lon
-            }
-            val distance = location.distanceTo(target)
-            val insideKey = "inside_" + place.id
-            val nearKey = "near1k_" + place.id
-            val wasInside = tracking.getBoolean(insideKey, false)
-            val wasNear = tracking.getBoolean(nearKey, false)
-            val isInside = distance <= place.radiusM
+                val target = Location(place.name).apply {
+                    latitude = place.lat
+                    longitude = place.lon
+                }
+                val distance = location.distanceTo(target)
+                val insideKey = "inside_" + place.id
+                val nearKey = "near1k_" + place.id
+                val wasInside = tracking.getBoolean(insideKey, false)
+                val wasNear = tracking.getBoolean(nearKey, false)
+                val isInside = distance <= place.radiusM
 
-            if (!wasInside && isInside) {
-                notifyEvent(7600 + (place.id.hashCode() and 0x3FF), "PLACE_ENTER", place.name + " reached", "Arrived at " + place.name)
-            }
-            if (wasInside && distance > place.radiusM + 80f) {
-                notifyEvent(7700 + (place.id.hashCode() and 0x3FF), "PLACE_EXIT", "Left " + place.name, "Left " + place.name)
-            }
-            if (!wasNear && distance <= 1000f && distance > place.radiusM && speedKmh >= 5) {
-                notifyEvent(
-                    7800 + (place.id.hashCode() and 0x3FF),
-                    "PLACE_APPROACH",
-                    "Approaching " + place.name,
-                    "Approximately " + "%.1f".format(distance / 1000f) + " km away"
-                )
-            }
+                if (!wasInside && isInside) {
+                    notifyEvent(
+                        7600 + (place.id.hashCode() and 0x3FF),
+                        "PLACE_ENTER",
+                        place.name + " reached",
+                        "Arrived at " + place.name
+                    )
+                }
+                if (wasInside && distance > place.radiusM + 80f) {
+                    notifyEvent(
+                        7700 + (place.id.hashCode() and 0x3FF),
+                        "PLACE_EXIT",
+                        "Left " + place.name,
+                        "Left " + place.name
+                    )
+                }
+                if (!wasNear && distance <= 1000f && distance > place.radiusM && speedKmh >= 5) {
+                    notifyEvent(
+                        7800 + (place.id.hashCode() and 0x3FF),
+                        "PLACE_APPROACH",
+                        "Approaching " + place.name,
+                        "Approximately " + "%.1f".format(distance / 1000f) + " km away"
+                    )
+                }
 
-            val edit = tracking.edit().putBoolean(insideKey, isInside)
-            if (distance <= 1000f) edit.putBoolean(nearKey, true)
-            if (distance >= 1500f) edit.putBoolean(nearKey, false)
-            edit.apply()
-        }
+                val edit = tracking.edit().putBoolean(insideKey, isInside)
+                if (distance <= 1000f) edit.putBoolean(nearKey, true)
+                if (distance >= 1500f) edit.putBoolean(nearKey, false)
+                edit.apply()
+            }
     }
 
     private fun validateSpeed(speed: Int) {
@@ -208,7 +320,12 @@ class LocationTrackingService : Service() {
             if (overSince == 0L) overSince = System.currentTimeMillis()
             if (!overspeedSent && System.currentTimeMillis() - overSince >= 10_000L) {
                 overspeedSent = true
-                notifyEvent(7302, "OVERSPEED", "Speed alert", "Estimated speed is " + speed + " km/h, above your " + threshold + " km/h family threshold.")
+                notifyEvent(
+                    7302,
+                    "OVERSPEED",
+                    "Speed alert",
+                    "Estimated speed is " + speed + " km/h, above your " + threshold + " km/h family threshold."
+                )
             }
         } else if (speed < threshold - 5) {
             overSince = 0L
@@ -217,10 +334,19 @@ class LocationTrackingService : Service() {
     }
 
     private fun trackingNotification(speed: Int): android.app.Notification {
-        val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val pi = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
         val trip = AppPrefs.trip(this)
         val text = when {
-            trip.active && trip.remainingM != null -> (trip.destinationName ?: "Trip") + " • " + "%.1f".format(trip.remainingM / 1000f) + " km • " + speed + " km/h"
+            trip.active && trip.remainingM != null ->
+                (trip.destinationName ?: "Trip") + " • " +
+                    "%.1f".format(trip.remainingM / 1000f) + " km road • " +
+                    (trip.etaMinutes?.let { "ETA " + it + " min • " } ?: "") +
+                    speed + " km/h"
             speed > 0 -> "Location active • " + speed + " km/h"
             else -> "Location sharing is active"
         }
@@ -240,9 +366,7 @@ class LocationTrackingService : Service() {
 
     private fun notifyEvent(id: Int, type: String, title: String, body: String) {
         showAlert(id, title, body)
-        Thread {
-            FamilyCloud.publishEvent(this, type, title, body)
-        }.start()
+        Thread { FamilyCloud.publishEvent(this, type, title, body) }.start()
     }
 
     private fun showAlert(id: Int, title: String, body: String) {
@@ -261,12 +385,15 @@ class LocationTrackingService : Service() {
     private fun syncCloudAsync(location: Location, speed: Int) {
         if (cloudSyncRunning || !AppPrefs.setupComplete(this)) return
         cloudSyncRunning = true
+
         val settings = getSharedPreferences("settings", MODE_PRIVATE)
         val shareSpeed = settings.getBoolean("share_speed", true)
         val shareBattery = settings.getBoolean("share_battery", true)
-        val motion = getSharedPreferences("tracking", MODE_PRIVATE).getString("motion", "Unknown") ?: "Unknown"
+        val motion = getSharedPreferences("tracking", MODE_PRIVATE)
+            .getString("motion", "Unknown") ?: "Unknown"
         val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
         val battery = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100)
+
         Thread {
             try {
                 val state = FamilyCloud.syncMyState(
@@ -279,6 +406,7 @@ class LocationTrackingService : Service() {
                 ).getOrNull() ?: return@Thread
 
                 AppPrefs.replacePlaces(this, state.places)
+
                 val myId = AppPrefs.memberId(this)
                 val lastSeen = AppPrefs.lastSeenEventTime(this)
                 var newest = lastSeen
@@ -286,7 +414,11 @@ class LocationTrackingService : Service() {
                     .filter { it.memberId != myId && it.createdAt > lastSeen }
                     .sortedBy { it.createdAt }
                     .forEach { event ->
-                        showAlert(8200 + (event.id.hashCode() and 0x3FF), event.title, event.memberName + " • " + event.body)
+                        showAlert(
+                            8200 + (event.id.hashCode() and 0x3FF),
+                            event.title,
+                            event.memberName + " • " + event.body
+                        )
                         if (event.createdAt > newest) newest = event.createdAt
                     }
                 if (newest > lastSeen) AppPrefs.setLastSeenEventTime(this, newest)
@@ -298,8 +430,12 @@ class LocationTrackingService : Service() {
 
     private fun createChannels() {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(NotificationChannel("location_tracking", "Live location", NotificationManager.IMPORTANCE_LOW))
-        nm.createNotificationChannel(NotificationChannel("family_alerts", "Family alerts", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(
+            NotificationChannel("location_tracking", "Live location", NotificationManager.IMPORTANCE_LOW)
+        )
+        nm.createNotificationChannel(
+            NotificationChannel("family_alerts", "Family alerts", NotificationManager.IMPORTANCE_HIGH)
+        )
     }
 
     override fun onDestroy() {
