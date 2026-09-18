@@ -1,4 +1,4 @@
-package in.familyconnect.app.tracking
+package com.familyconnect.app.tracking
 
 import android.Manifest
 import android.app.NotificationChannel
@@ -11,8 +11,8 @@ import android.os.IBinder
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.*
-import in.familyconnect.app.MainActivity
-import in.familyconnect.app.R
+import com.familyconnect.app.MainActivity
+import com.familyconnect.app.R
 import kotlin.math.roundToInt
 
 class LocationTrackingService : Service() {
