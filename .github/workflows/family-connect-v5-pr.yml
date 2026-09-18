@@ -1,0 +1,39 @@
+name: Family Connect V5 Build
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'family-connect/**'
+      - '.github/workflows/family-connect-v5-pr.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-v5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Decode stable signing key
+        working-directory: family-connect
+        run: base64 -d test-signing-keystore.b64 > familyconnect-test.jks
+      - name: Build V5 APK
+        working-directory: family-connect
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+      - name: Prepare APK
+        run: cp family-connect/app/build/outputs/apk/debug/app-debug.apk FamilyConnect-v5-stable-live.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FamilyConnect-v5-stable-live
+          path: FamilyConnect-v5-stable-live.apk
+          if-no-files-found: error
+          retention-days: 7
