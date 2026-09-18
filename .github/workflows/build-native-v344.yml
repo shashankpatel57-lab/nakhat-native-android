@@ -101,14 +101,13 @@ jobs:
           from pathlib import Path
           p = Path('app/src/main/java/in/nakhat/app/MainActivity.java')
           s = p.read_text()
-          old = '''            SharedPreferences prefs = getSharedPreferences("nakhat_daily_notice", MODE_PRIVATE);
-            String marker = key + "|" + indiaDay();
-            if (marker.equals(prefs.getString("last_seen_marker", ""))) return;
-
-            // Mark as seen when it is displayed, so navigating/reopening during the
-            // same day does not keep interrupting the customer.
-            prefs.edit().putString("last_seen_marker", marker).apply();
-            showNotificationBanner(n);'''
+          start_needle = '            SharedPreferences prefs = getSharedPreferences("nakhat_daily_notice", MODE_PRIVATE);'
+          end_needle = '            showNotificationBanner(n);'
+          start = s.find(start_needle)
+          end = s.find(end_needle, start)
+          if start < 0 or end < 0:
+              raise SystemExit('Notification banner block not found')
+          end += len(end_needle)
           new = '''            String frequency = n.optString("frequency", "once_per_day").trim();
             boolean everyVisit = "every_visit".equals(frequency);
 
@@ -120,10 +119,10 @@ jobs:
             }
 
             showNotificationBanner(n);'''
-          if old not in s:
-              raise SystemExit('Expected V3.4.2 notification block not found')
-          p.write_text(s.replace(old, new))
+          p.write_text(s[:start] + new + s[end:])
           PY
+          grep -q 'every_visit' app/src/main/java/in/nakhat/app/MainActivity.java
+          grep -q 'notification.php' app/src/main/java/in/nakhat/app/MainActivity.java
 
       - name: Apply V3.4.4 resilient DNS and network stack
         shell: bash
