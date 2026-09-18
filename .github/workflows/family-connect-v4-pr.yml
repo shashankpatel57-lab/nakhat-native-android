@@ -1,0 +1,77 @@
+name: Family Connect V4 Routing Build
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'family-connect/**'
+      - '.github/workflows/family-connect-v4-pr.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-v4:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Smoke test Supabase road routing
+        run: |
+          python - <<'PY'
+          import json, secrets, urllib.request
+          API="https://fvpwjzgmqdtmdtfquvmi.supabase.co/functions/v1/family-api"
+          KEY="sb_publishable_kZsea5gWYdoA8fY4-1onyQ_ambvq8ZS"
+          def call(payload):
+              data=json.dumps(payload).encode()
+              req=urllib.request.Request(API,data=data,method="POST",headers={"Content-Type":"application/json","apikey":KEY})
+              with urllib.request.urlopen(req,timeout=25) as r:
+                  obj=json.loads(r.read().decode())
+              assert obj.get("ok") is True,obj
+              return obj
+          secret=secrets.token_urlsafe(32)
+          created=call({"action":"create_family","familyName":"Route CI","memberName":"Owner CI","secret":secret})
+          cid=created["circleId"]; owner=created["memberId"]
+          route=call({"action":"route","circleId":cid,"secret":secret,"fromLat":26.8467,"fromLon":80.9462,"toLat":26.7606,"toLon":80.8893})
+          assert route["distanceM"] > 1000, route
+          assert route["durationS"] > 60, route
+          assert len(route["points"]) > 5, route
+          call({"action":"sync_state","circleId":cid,"secret":secret,"memberId":owner,"state":{
+            "latitude":26.8467,"longitude":80.9462,"speedKmh":42,"avgSpeedKmh":35,"maxSpeedKmh":58,"battery":80,
+            "motion":"Driving","destinationName":"Destination","destinationLat":26.7606,"destinationLon":80.8893,
+            "remainingM":route["distanceM"],"etaMinutes":max(1,round(route["durationS"]/60)),"tripActive":True,
+            "routePoints":route["points"],"routeDistanceM":route["distanceM"],"routeDurationS":route["durationS"]
+          }})
+          state=call({"action":"get_state","circleId":cid,"secret":secret})
+          ms=state["state"]["members"][0]["member_state"][0]
+          assert len(ms["route_points"]) > 5, ms
+          assert ms["destination_name"] == "Destination", ms
+          call({"action":"delete_family","circleId":cid,"secret":secret,"memberId":owner})
+          print("Road routing + route sync passed")
+          PY
+
+      - name: Decode signing key
+        working-directory: family-connect
+        run: base64 -d test-signing-keystore.b64 > familyconnect-test.jks
+
+      - name: Build APK
+        working-directory: family-connect
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Prepare APK
+        run: cp family-connect/app/build/outputs/apk/debug/app-debug.apk FamilyConnect-v4-routing.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FamilyConnect-v4-routing
+          path: FamilyConnect-v4-routing.apk
+          if-no-files-found: error
+          retention-days: 7
