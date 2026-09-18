@@ -122,8 +122,8 @@ fun HomeDashboard(
                                 "TRIP_STARTED",
                                 AppPrefs.profileName(context) + " started a trip",
                                 "Going to " + place.name + " • " +
-                                    if (route.distanceM < 1000f) route.distanceM.toInt().toString() + " m by road"
-                                    else "%.1f km by road".format(route.distanceM / 1000f) +
+                                    (if (route.distanceM < 1000f) route.distanceM.toInt().toString() + " m by road"
+                                    else "%.1f km by road".format(route.distanceM / 1000f)) +
                                     " • ETA " + ((route.durationS + 59) / 60).coerceAtLeast(1) + " min"
                             )
                         }
@@ -616,16 +616,36 @@ private fun TripStartDialog(
     places: List<SavedPlace>,
     onDismiss: () -> Unit,
     onStart: (SavedPlace) -> Unit,
-    onNeedPlace: () -> Unit
+    onNeedPlace: () -> Unit,
+    onOpenGoogleMaps: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Where are you going?", fontWeight = FontWeight.Black) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (places.isEmpty()) {
-                    Text("Add Home, Office or another destination first.", color = Muted)
-                } else {
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenGoogleMaps),
+                    color = PurpleSoft,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Map, null, tint = Purple)
+                        Spacer(Modifier.width(9.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Choose in Google Maps", fontWeight = FontWeight.Black, color = Ink)
+                            Text(
+                                "Pick any place in Google Maps → Share → Family Connect",
+                                color = Muted,
+                                fontSize = 9.8.sp
+                            )
+                        }
+                        Icon(Icons.Default.OpenInNew, null, tint = Purple)
+                    }
+                }
+
+                if (places.isNotEmpty()) {
+                    Text("Saved places", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     places.forEach { place ->
                         Surface(
                             modifier = Modifier.fillMaxWidth().clickable { onStart(place) },
@@ -640,12 +660,20 @@ private fun TripStartDialog(
                             }
                         }
                     }
+                } else {
+                    Text(
+                        "No saved places yet. You can still choose any destination through Google Maps.",
+                        color = Muted,
+                        fontSize = 10.5.sp
+                    )
                 }
             }
         },
         confirmButton = {
-            if (places.isEmpty()) TextButton(onClick = onNeedPlace) { Text("Add place") }
-            else TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+        dismissButton = {
+            TextButton(onClick = onNeedPlace) { Text("Manage saved places") }
         }
     )
 }
