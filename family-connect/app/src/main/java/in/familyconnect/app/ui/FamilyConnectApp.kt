@@ -1,4 +1,4 @@
-package in.familyconnect.app.ui
+package com.familyconnect.app.ui
 
 import android.Manifest
 import android.content.Context
@@ -38,11 +38,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import in.familyconnect.app.data.DeviceRepository
-import in.familyconnect.app.model.AppScreen
-import in.familyconnect.app.model.DeviceSnapshot
-import in.familyconnect.app.model.MemberUi
-import in.familyconnect.app.tracking.LocationTrackingService
+import com.familyconnect.app.data.DeviceRepository
+import com.familyconnect.app.model.AppScreen
+import com.familyconnect.app.model.DeviceSnapshot
+import com.familyconnect.app.model.MemberUi
+import com.familyconnect.app.tracking.LocationTrackingService
 import kotlinx.coroutines.delay
 import org.osmdroid.config.Configuration
 import org.osmdroid.util.GeoPoint
