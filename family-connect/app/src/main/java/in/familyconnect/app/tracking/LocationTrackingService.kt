@@ -105,10 +105,10 @@ class LocationTrackingService : Service() {
         }
 
         val trip = AppPrefs.trip(this)
-        val interval = if (trip.active) 3500L else 8000L
+        val interval = if (trip.active) 2000L else 6000L
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, interval)
-            .setMinUpdateIntervalMillis(if (trip.active) 2200L else 4500L)
-            .setMaxUpdateDelayMillis(if (trip.active) 5500L else 15000L)
+            .setMinUpdateIntervalMillis(if (trip.active) 1200L else 3500L)
+            .setMaxUpdateDelayMillis(if (trip.active) 3000L else 10000L)
             .build()
 
         try {
