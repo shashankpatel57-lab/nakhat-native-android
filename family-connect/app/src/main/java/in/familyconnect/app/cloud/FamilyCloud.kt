@@ -19,6 +19,7 @@ data class CloudMember(
     val name: String,
     val lat: Double?,
     val lon: Double?,
+    val accuracyM: Float?,
     val speed: Int,
     val avgSpeed: Int,
     val maxSpeed: Int,
@@ -30,9 +31,10 @@ data class CloudMember(
     val destinationLon: Double?,
     val remainingM: Float?,
     val etaMinutes: Int?,
-    val routePoints: List<RoutePoint>,
+    val tripActive: Boolean,
     val routeDistanceM: Float?,
-    val routeDurationS: Int?
+    val routeDurationS: Int?,
+    val routeUpdatedAt: Long
 )
 
 data class CloudEvent(
@@ -55,8 +57,8 @@ data class CloudState(
 object FamilyCloud {
     private const val API = "https://fvpwjzgmqdtmdtfquvmi.supabase.co/functions/v1/family-api"
     private const val PUBLISHABLE_KEY = "sb_publishable_kZsea5gWYdoA8fY4-1onyQ_ambvq8ZS"
-    private const val CONNECT_TIMEOUT = 10000
-    private const val READ_TIMEOUT = 12000
+    private const val CONNECT_TIMEOUT = 9000
+    private const val READ_TIMEOUT = 11000
 
     fun createFamily(context: Context, personName: String, familyName: String): Result<String> = runCatching {
         val secret = randomSecret()
@@ -123,6 +125,49 @@ object FamilyCloud {
         )
     }
 
+    fun setTripRoute(context: Context, route: RoadRoute): Result<Unit> = runCatching {
+        val arr = JSONArray()
+        route.points.forEach { arr.put(JSONArray().put(it.lat).put(it.lon)) }
+        call(
+            authPayload(context, "set_trip_route")
+                .put("memberId", AppPrefs.memberId(context))
+                .put(
+                    "route",
+                    JSONObject()
+                        .put("points", arr)
+                        .put("distanceM", route.distanceM)
+                        .put("durationS", route.durationS)
+                )
+        )
+    }
+
+    fun clearTripRoute(context: Context): Result<Unit> = runCatching {
+        call(
+            authPayload(context, "clear_trip_route")
+                .put("memberId", AppPrefs.memberId(context))
+        )
+    }
+
+    fun getTripRoute(context: Context, memberId: String): Result<RoadRoute> = runCatching {
+        val response = call(
+            authPayload(context, "get_trip_route")
+                .put("requestedMemberId", memberId)
+        )
+        val route = response.optJSONObject("route") ?: JSONObject()
+        val arr = route.optJSONArray("route_points") ?: JSONArray()
+        val points = buildList {
+            for (i in 0 until arr.length()) {
+                val p = arr.optJSONArray(i) ?: continue
+                if (p.length() >= 2) add(RoutePoint(p.optDouble(0), p.optDouble(1)))
+            }
+        }
+        RoadRoute(
+            points = points,
+            distanceM = route.optDouble("route_distance_m", 0.0).toFloat(),
+            durationS = route.optInt("route_duration_s", 0)
+        )
+    }
+
     fun syncMyState(
         context: Context,
         lat: Double?,
@@ -133,8 +178,6 @@ object FamilyCloud {
     ): Result<CloudState> = runCatching {
         val trip = AppPrefs.trip(context)
         val tracking = context.getSharedPreferences("tracking", Context.MODE_PRIVATE)
-        val routeArray = JSONArray()
-        trip.routePoints.forEach { routeArray.put(JSONArray().put(it.lat).put(it.lon)) }
 
         val payload = authPayload(context, "sync_state")
             .put("memberId", AppPrefs.memberId(context))
@@ -150,15 +193,12 @@ object FamilyCloud {
                     .put("battery", if (battery >= 0) battery else JSONObject.NULL)
                     .put("charging", JSONObject.NULL)
                     .put("motion", motion)
-                    .put("destinationName", trip.destinationName ?: JSONObject.NULL)
-                    .put("destinationLat", trip.destinationLat ?: JSONObject.NULL)
-                    .put("destinationLon", trip.destinationLon ?: JSONObject.NULL)
-                    .put("remainingM", trip.remainingM ?: JSONObject.NULL)
-                    .put("etaMinutes", trip.etaMinutes ?: JSONObject.NULL)
+                    .put("destinationName", if (trip.active) trip.destinationName ?: JSONObject.NULL else JSONObject.NULL)
+                    .put("destinationLat", if (trip.active) trip.destinationLat ?: JSONObject.NULL else JSONObject.NULL)
+                    .put("destinationLon", if (trip.active) trip.destinationLon ?: JSONObject.NULL else JSONObject.NULL)
+                    .put("remainingM", if (trip.active) trip.remainingM ?: JSONObject.NULL else JSONObject.NULL)
+                    .put("etaMinutes", if (trip.active) trip.etaMinutes ?: JSONObject.NULL else JSONObject.NULL)
                     .put("tripActive", trip.active)
-                    .put("routePoints", if (trip.active && routeArray.length() > 1) routeArray else JSONObject.NULL)
-                    .put("routeDistanceM", trip.routeDistanceM ?: JSONObject.NULL)
-                    .put("routeDurationS", trip.routeDurationS ?: JSONObject.NULL)
             )
 
         val response = call(payload)
@@ -223,13 +263,13 @@ object FamilyCloud {
                     is JSONArray -> rawState.optJSONObject(0) ?: JSONObject()
                     else -> JSONObject()
                 }
-                val routePoints = decodeRoute(state.optJSONArray("route_points"))
                 add(
                     CloudMember(
                         id = m.optString("id"),
                         name = m.optString("name", "Member"),
                         lat = nullableDouble(state, "latitude"),
                         lon = nullableDouble(state, "longitude"),
+                        accuracyM = nullableDouble(state, "accuracy_m")?.toFloat(),
                         speed = state.optInt("speed_kmh", 0),
                         avgSpeed = state.optInt("avg_speed_kmh", 0),
                         maxSpeed = state.optInt("max_speed_kmh", 0),
@@ -241,16 +281,16 @@ object FamilyCloud {
                         destinationLon = nullableDouble(state, "destination_lon"),
                         remainingM = nullableDouble(state, "remaining_m")?.toFloat(),
                         etaMinutes = nullableDouble(state, "eta_minutes")?.toInt(),
-                        routePoints = routePoints,
+                        tripActive = state.optBoolean("trip_active", false),
                         routeDistanceM = nullableDouble(state, "route_distance_m")?.toFloat(),
-                        routeDurationS = nullableDouble(state, "route_duration_s")?.toInt()
+                        routeDurationS = nullableDouble(state, "route_duration_s")?.toInt(),
+                        routeUpdatedAt = parseIsoMillis(state.optString("route_updated_at"))
                     )
                 )
             }
         }
 
         val memberNames = members.associate { it.id to it.name }
-
         val eventsJson = root.optJSONArray("events") ?: JSONArray()
         val events = buildList {
             for (i in 0 until eventsJson.length()) {
@@ -288,16 +328,6 @@ object FamilyCloud {
         }
 
         return CloudState(familyName, members, events, places)
-    }
-
-    private fun decodeRoute(arr: JSONArray?): List<RoutePoint> {
-        if (arr == null) return emptyList()
-        return buildList {
-            for (i in 0 until arr.length()) {
-                val p = arr.optJSONArray(i) ?: continue
-                if (p.length() >= 2) add(RoutePoint(p.optDouble(0), p.optDouble(1)))
-            }
-        }
     }
 
     private fun call(payload: JSONObject): JSONObject {
