@@ -1,4 +1,4 @@
-package in.familyconnect.app.model
+package com.familyconnect.app.model
 
 enum class AppScreen(val label: String) { Home("Home"), Map("Map"), Family("Family"), Safety("Safety"), Profile("Profile") }
 
