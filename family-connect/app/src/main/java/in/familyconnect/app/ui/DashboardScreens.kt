@@ -543,10 +543,18 @@ fun LiveFamilyMap(
 ) {
     val context = LocalContext.current
     Configuration.getInstance().userAgentValue = context.packageName
-    var selectedId by remember { mutableStateOf<String?>(null) }
+
     val members = cloud?.members.orEmpty()
     val locatedMembers = members.filter { it.lat != null && it.lon != null }
-    val center = locatedMembers.firstOrNull()?.let { GeoPoint(it.lat!!, it.lon!!) }
+    var selectedId by remember(locatedMembers.map { it.id }) {
+        mutableStateOf(locatedMembers.firstOrNull()?.id)
+    }
+    var didInitialFocus by remember { mutableStateOf(false) }
+
+    val selected = members.firstOrNull { it.id == selectedId } ?: locatedMembers.firstOrNull()
+    val fallbackCenter = selected?.let { m ->
+        if (m.lat != null && m.lon != null) GeoPoint(m.lat, m.lon) else null
+    } ?: locatedMembers.firstOrNull()?.let { GeoPoint(it.lat!!, it.lon!!) }
         ?: if (snapshot.latitude != null && snapshot.longitude != null) GeoPoint(snapshot.latitude, snapshot.longitude)
         else GeoPoint(20.0, 0.0)
 
@@ -556,117 +564,233 @@ fun LiveFamilyMap(
             factory = {
                 MapView(it).apply {
                     setMultiTouchControls(true)
+                    setBuiltInZoomControls(false)
                     controller.setZoom(if (locatedMembers.isEmpty()) 3.0 else 13.5)
-                    controller.setCenter(center)
+                    controller.setCenter(fallbackCenter)
                 }
             },
             update = { map ->
                 map.overlays.clear()
-                locatedMembers.forEach { member ->
-                    val p = GeoPoint(member.lat!!, member.lon!!)
-                    val marker = Marker(map).apply {
-                        position = p
-                        icon = memberMarkerDrawable(context, member)
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        title = member.name + " • " + member.speed + " km/h"
-                        setOnMarkerClickListener { _, _ ->
-                            selectedId = member.id
-                            true
-                        }
-                    }
-                    map.overlays.add(marker)
 
-                    if (member.destinationLat != null && member.destinationLon != null) {
-                        val dest = GeoPoint(member.destinationLat, member.destinationLon)
+                // First draw every active road route so markers stay visually on top.
+                locatedMembers.forEach { member ->
+                    if (member.routePoints.size >= 2 && member.destinationName != null) {
                         map.overlays.add(
                             Polyline().apply {
-                                setPoints(listOf(p, dest))
-                                outlinePaint.strokeWidth = 7f
-                                outlinePaint.color = Purple.toArgb()
-                            }
-                        )
-                        map.overlays.add(
-                            Marker(map).apply {
-                                position = dest
-                                title = member.destinationName ?: "Destination"
-                                snippet = "Destination for " + member.name
-                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                                setPoints(member.routePoints.map { GeoPoint(it.lat, it.lon) })
+                                outlinePaint.strokeWidth = if (member.id == selectedId) 11f else 7f
+                                outlinePaint.color = if (member.id == selectedId) Purple.toArgb() else avatarColor(member.id).toArgb()
+                                outlinePaint.alpha = if (member.id == selectedId) 230 else 135
+                                isGeodesic = false
                             }
                         )
                     }
                 }
-                if (locatedMembers.isNotEmpty()) map.controller.setCenter(center)
+
+                // Then draw destinations for active trips.
+                locatedMembers.forEach { member ->
+                    if (member.destinationLat != null && member.destinationLon != null && member.destinationName != null) {
+                        map.overlays.add(
+                            Marker(map).apply {
+                                position = GeoPoint(member.destinationLat, member.destinationLon)
+                                icon = destinationMarkerDrawable(context, member)
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                                title = member.destinationName
+                                snippet = member.name + " destination"
+                                setOnMarkerClickListener { _, _ ->
+                                    selectedId = member.id
+                                    true
+                                }
+                            }
+                        )
+                    }
+                }
+
+                // Current position of every family member is always shown.
+                locatedMembers.forEach { member ->
+                    val p = GeoPoint(member.lat!!, member.lon!!)
+                    map.overlays.add(
+                        Marker(map).apply {
+                            position = p
+                            icon = memberMarkerDrawable(context, member)
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            title = member.name
+                            snippet = member.speed.toString() + " km/h • " + member.motion
+                            setOnMarkerClickListener { _, _ ->
+                                selectedId = member.id
+                                map.controller.animateTo(p)
+                                true
+                            }
+                        }
+                    )
+                }
+
+                if (!didInitialFocus && locatedMembers.isNotEmpty()) {
+                    val focusMember = selected ?: locatedMembers.first()
+                    val points = mutableListOf<GeoPoint>()
+                    focusMember.lat?.let { lat -> focusMember.lon?.let { lon -> points.add(GeoPoint(lat, lon)) } }
+                    focusMember.routePoints.forEach { points.add(GeoPoint(it.lat, it.lon)) }
+                    focusMember.destinationLat?.let { lat -> focusMember.destinationLon?.let { lon -> points.add(GeoPoint(lat, lon)) } }
+
+                    if (points.size >= 2) {
+                        val north = points.maxOf { it.latitude }
+                        val south = points.minOf { it.latitude }
+                        val east = points.maxOf { it.longitude }
+                        val west = points.minOf { it.longitude }
+                        map.zoomToBoundingBox(org.osmdroid.util.BoundingBox(north, east, south, west), true, 90)
+                    } else {
+                        map.controller.setZoom(14.0)
+                        map.controller.setCenter(fallbackCenter)
+                    }
+                    didInitialFocus = true
+                }
                 map.invalidate()
             }
         )
 
-        Column(
-            Modifier.fillMaxWidth().padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(9.dp)
+        // Compact top controls only; keep the map itself uncluttered.
+        Surface(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = .96f),
+            shape = RoundedCornerShape(19.dp),
+            shadowElevation = 8.dp
         ) {
-            Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha=.96f),
-                shape = RoundedCornerShape(20.dp),
-                shadowElevation = 8.dp
-            ) {
-                Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Map, null, tint = Purple)
-                    Spacer(Modifier.width(9.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("Live family map", fontWeight = FontWeight.Black, fontSize = 15.5.sp)
-                        Text(
-                            if (locatedMembers.isEmpty()) "No joined member is sharing a location yet"
-                            else locatedMembers.size.toString() + " live member" + if (locatedMembers.size == 1) "" else "s",
-                            color = Muted,
-                            fontSize = 10.5.sp
-                        )
-                    }
-                    if (!trackingEnabled) {
-                        Button(onClick = onStartTracking, shape = RoundedCornerShape(13.dp)) {
-                            Text("Share mine", fontSize = 10.5.sp)
-                        }
+            Row(Modifier.padding(horizontal = 13.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(38.dp).background(PurpleSoft, RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Map, null, tint = Purple, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Family Live Map", fontWeight = FontWeight.Black, fontSize = 14.5.sp)
+                    Text(
+                        when {
+                            locatedMembers.isEmpty() -> "No family location is being shared"
+                            locatedMembers.any { it.destinationName != null } ->
+                                locatedMembers.size.toString() + " live • road trips shown on map"
+                            else -> locatedMembers.size.toString() + " live member" + if (locatedMembers.size == 1) "" else "s"
+                        },
+                        color = Muted,
+                        fontSize = 9.8.sp
+                    )
+                }
+                if (!trackingEnabled) {
+                    FilledTonalButton(onClick = onStartTracking, shape = RoundedCornerShape(12.dp)) {
+                        Icon(Icons.Default.MyLocation, null, Modifier.size(15.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("Share mine", fontSize = 10.sp)
                     }
                 }
             }
         }
 
-        val selected = members.firstOrNull { it.id == selectedId } ?: locatedMembers.firstOrNull()
-        selected?.let { member ->
-            Surface(
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha=.97f),
-                shape = RoundedCornerShape(23.dp),
-                shadowElevation = 9.dp
-            ) {
-                Column(Modifier.padding(15.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(42.dp).background(avatarColor(member.id), CircleShape), contentAlignment = Alignment.Center) {
-                            Text(member.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Black)
+        Column(
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (locatedMembers.size > 1) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(locatedMembers, key = { it.id }) { member ->
+                        val active = member.id == selected?.id
+                        Surface(
+                            modifier = Modifier.clickable {
+                                selectedId = member.id
+                                didInitialFocus = false
+                            },
+                            color = if (active) Purple else MaterialTheme.colorScheme.surface.copy(alpha=.96f),
+                            contentColor = if (active) Color.White else MaterialTheme.colorScheme.onSurface,
+                            shape = RoundedCornerShape(14.dp),
+                            shadowElevation = 5.dp
+                        ) {
+                            Row(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    Modifier.size(23.dp).background(if (active) Color.White.copy(alpha=.2f) else avatarColor(member.id), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(member.name.take(1).uppercase(), fontSize = 9.sp, fontWeight = FontWeight.Black, color = Color.White)
+                                }
+                                Spacer(Modifier.width(6.dp))
+                                Text(member.name, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
+                                if (member.speed > 0) {
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("• " + member.speed + " km/h", fontSize = 9.5.sp)
+                                }
+                            }
                         }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(member.name, fontWeight = FontWeight.Black, fontSize = 15.sp)
-                            Text(member.motion + " • " + ageText(member.updatedAt), color = Muted, fontSize = 10.sp)
+                    }
+                }
+            }
+
+            selected?.let { member ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 10.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha=.98f),
+                    shape = RoundedCornerShape(22.dp),
+                    shadowElevation = 10.dp
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.size(43.dp).background(avatarColor(member.id), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(member.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Black)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(member.name, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                                Text(member.motion + " • updated " + ageText(member.updatedAt), color = Muted, fontSize = 9.8.sp)
+                            }
+                            StatusPill(member.speed.toString() + " km/h", PurpleSoft, Purple)
                         }
-                        StatusPill(member.speed.toString() + " km/h", PurpleSoft, Purple)
-                    }
-                    Spacer(Modifier.height(11.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        SmallMetric("Current", member.speed.toString() + " km/h")
-                        SmallMetric("Average", member.avgSpeed.toString() + " km/h")
-                        SmallMetric("Maximum", member.maxSpeed.toString() + " km/h")
-                        SmallMetric("Battery", if (member.battery >= 0) member.battery.toString() + "%" else "Private")
-                    }
-                    member.destinationName?.let {
+
                         Spacer(Modifier.height(10.dp))
-                        Text(
-                            "Destination: " + it + " • " +
-                                (member.remainingM?.let { d -> if (d < 1000f) d.toInt().toString() + " m" else "%.1f km".format(d / 1000f) } ?: "…") +
-                                (member.etaMinutes?.let { e -> " • ETA " + e + " min" } ?: ""),
-                            fontWeight = FontWeight.Bold,
-                            color = Purple,
-                            fontSize = 11.sp
-                        )
+
+                        Row(
+                            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(14.dp)).padding(10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            SmallMetric("Current", member.speed.toString() + " km/h")
+                            SmallMetric("Average", member.avgSpeed.toString() + " km/h")
+                            SmallMetric("Maximum", member.maxSpeed.toString() + " km/h")
+                            SmallMetric("Battery", if (member.battery >= 0) member.battery.toString() + "%" else "Private")
+                        }
+
+                        member.destinationName?.let { destination ->
+                            Spacer(Modifier.height(10.dp))
+                            Row(
+                                Modifier.fillMaxWidth().background(PurpleSoft, RoundedCornerShape(14.dp)).padding(11.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    Modifier.size(37.dp).background(Color.White.copy(alpha=.72f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Flag, null, tint = Purple, modifier = Modifier.size(20.dp))
+                                }
+                                Spacer(Modifier.width(9.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("Going to " + destination, fontWeight = FontWeight.Black, fontSize = 12.sp, color = Ink)
+                                    val roadDistance = member.remainingM?.let {
+                                        if (it < 1000f) it.toInt().toString() + " m by road"
+                                        else "%.1f km by road".format(it / 1000f)
+                                    } ?: "Road distance updating"
+                                    Text(
+                                        roadDistance + (member.etaMinutes?.let { " • ETA " + it + " min" } ?: ""),
+                                        color = Ink.copy(alpha=.68f),
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                if (member.routePoints.size >= 2) {
+                                    StatusPill("ROUTE", Color.White.copy(alpha=.8f), Purple)
+                                }
+                            }
+                        }
                     }
                 }
             }
