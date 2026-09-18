@@ -686,184 +686,345 @@ fun LiveFamilyMap(
     onStartTracking: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
+
     Configuration.getInstance().userAgentValue = context.packageName
 
     val members = cloud?.members.orEmpty()
     val locatedMembers = members.filter { it.lat != null && it.lon != null }
-    var selectedId by remember(locatedMembers.map { it.id }) {
-        mutableStateOf(locatedMembers.firstOrNull()?.id)
+    var selectedId by remember { mutableStateOf<String?>(null) }
+    var followSelected by remember { mutableStateOf(true) }
+    var mapError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(locatedMembers.map { it.id }) {
+        if (selectedId == null || locatedMembers.none { it.id == selectedId }) {
+            selectedId = locatedMembers.firstOrNull()?.id
+        }
     }
-    var didInitialFocus by remember { mutableStateOf(false) }
 
     val selected = members.firstOrNull { it.id == selectedId } ?: locatedMembers.firstOrNull()
-    val fallbackCenter = selected?.let { m ->
-        if (m.lat != null && m.lon != null) GeoPoint(m.lat, m.lon) else null
-    } ?: locatedMembers.firstOrNull()?.let { GeoPoint(it.lat!!, it.lon!!) }
-        ?: if (snapshot.latitude != null && snapshot.longitude != null) GeoPoint(snapshot.latitude, snapshot.longitude)
-        else GeoPoint(20.0, 0.0)
+
+    val routeCache = remember { mutableStateMapOf<String, RoadRoute>() }
+    val routeVersionCache = remember { mutableStateMapOf<String, Long>() }
+
+    LaunchedEffect(
+        members.map { Triple(it.id, it.tripActive, it.routeUpdatedAt) }
+    ) {
+        val activeIds = members.filter { it.tripActive }.map { it.id }.toSet()
+        routeCache.keys.toList().filterNot { it in activeIds }.forEach {
+            routeCache.remove(it)
+            routeVersionCache.remove(it)
+        }
+
+        members.filter { it.tripActive && it.routeUpdatedAt > 0L }.forEach { member ->
+            val loadedVersion = routeVersionCache[member.id]
+            if (loadedVersion != member.routeUpdatedAt) {
+                val result = withContext(Dispatchers.IO) { FamilyCloud.getTripRoute(context, member.id) }
+                result.onSuccess { route ->
+                    if (route.points.size >= 2) {
+                        routeCache[member.id] = route
+                        routeVersionCache[member.id] = member.routeUpdatedAt
+                    }
+                }
+            }
+        }
+    }
+
+    val initialCenter = selected?.let { member ->
+        if (member.lat != null && member.lon != null) GeoPoint(member.lat, member.lon) else null
+    } ?: if (snapshot.latitude != null && snapshot.longitude != null) {
+        GeoPoint(snapshot.latitude, snapshot.longitude)
+    } else {
+        GeoPoint(26.8467, 80.9462)
+    }
+
+    val mapView = remember {
+        MapView(context).apply {
+            setTileSource(TileSourceFactory.MAPNIK)
+            setUseDataConnection(true)
+            setMultiTouchControls(true)
+            setBuiltInZoomControls(false)
+            minZoomLevel = 3.0
+            maxZoomLevel = 20.0
+            controller.setZoom(if (locatedMembers.isEmpty()) 11.0 else 14.0)
+            controller.setCenter(initialCenter)
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, mapView) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            runCatching { mapView.onPause() }
+            runCatching { mapView.onDetach() }
+        }
+    }
+
+    fun fitSelectedRoute() {
+        val member = members.firstOrNull { it.id == selectedId } ?: return
+        val route = routeCache[member.id]
+        val points = mutableListOf<GeoPoint>()
+        member.lat?.let { lat -> member.lon?.let { lon -> points += GeoPoint(lat, lon) } }
+        route?.points?.forEach { points += GeoPoint(it.lat, it.lon) }
+        member.destinationLat?.let { lat -> member.destinationLon?.let { lon -> points += GeoPoint(lat, lon) } }
+
+        if (points.size >= 2) {
+            val north = points.maxOf { it.latitude }
+            val south = points.minOf { it.latitude }
+            val east = points.maxOf { it.longitude }
+            val west = points.minOf { it.longitude }
+            mapView.post {
+                runCatching {
+                    mapView.zoomToBoundingBox(
+                        org.osmdroid.util.BoundingBox(north, east, south, west),
+                        true,
+                        90
+                    )
+                }
+            }
+        } else if (member.lat != null && member.lon != null) {
+            mapView.controller.setZoom(15.0)
+            mapView.controller.animateTo(GeoPoint(member.lat, member.lon))
+        }
+    }
+
+    LaunchedEffect(selectedId) {
+        val member = members.firstOrNull { it.id == selectedId }
+        if (member?.lat != null && member.lon != null) {
+            mapView.controller.setZoom(maxOf(mapView.zoomLevelDouble, 14.0))
+            mapView.controller.animateTo(GeoPoint(member.lat, member.lon))
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
-            factory = {
-                MapView(it).apply {
-                    setMultiTouchControls(true)
-                    setBuiltInZoomControls(false)
-                    controller.setZoom(if (locatedMembers.isEmpty()) 3.0 else 13.5)
-                    controller.setCenter(fallbackCenter)
-                }
-            },
+            factory = { mapView },
             update = { map ->
-                map.overlays.clear()
+                runCatching {
+                    map.overlays.clear()
 
-                // First draw every active road route so markers stay visually on top.
-                locatedMembers.forEach { member ->
-                    if (member.routePoints.size >= 2 && member.destinationName != null) {
-                        map.overlays.add(
-                            Polyline().apply {
-                                setPoints(member.routePoints.map { GeoPoint(it.lat, it.lon) })
-                                outlinePaint.strokeWidth = if (member.id == selectedId) 11f else 7f
-                                outlinePaint.color = if (member.id == selectedId) Purple.toArgb() else avatarColor(member.id).toArgb()
-                                outlinePaint.alpha = if (member.id == selectedId) 230 else 135
-                                isGeodesic = false
-                            }
-                        )
+                    // Route polylines come from a separate, cached request and are NOT part
+                    // of the frequent live-state payload.
+                    locatedMembers.forEach { member ->
+                        val route = routeCache[member.id]
+                        if (member.tripActive && route != null && route.points.size >= 2) {
+                            map.overlays.add(
+                                Polyline().apply {
+                                    setPoints(route.points.map { GeoPoint(it.lat, it.lon) })
+                                    outlinePaint.strokeWidth = if (member.id == selectedId) 10f else 6f
+                                    outlinePaint.color = if (member.id == selectedId) {
+                                        Purple.toArgb()
+                                    } else {
+                                        avatarColor(member.id).toArgb()
+                                    }
+                                    outlinePaint.alpha = if (member.id == selectedId) 235 else 125
+                                    isGeodesic = false
+                                }
+                            )
+                        }
                     }
-                }
 
-                // Then draw destinations for active trips.
-                locatedMembers.forEach { member ->
-                    if (member.destinationLat != null && member.destinationLon != null && member.destinationName != null) {
+                    // Trip destinations.
+                    locatedMembers.forEach { member ->
+                        if (
+                            member.tripActive &&
+                            member.destinationLat != null &&
+                            member.destinationLon != null &&
+                            member.destinationName != null
+                        ) {
+                            map.overlays.add(
+                                Marker(map).apply {
+                                    position = GeoPoint(member.destinationLat, member.destinationLon)
+                                    icon = destinationMarkerDrawable(context, member)
+                                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                                    title = member.destinationName
+                                    snippet = member.name + " destination"
+                                    setOnMarkerClickListener { _, _ ->
+                                        selectedId = member.id
+                                        followSelected = true
+                                        true
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    // Every member's current live position.
+                    locatedMembers.forEach { member ->
+                        val point = GeoPoint(member.lat!!, member.lon!!)
                         map.overlays.add(
                             Marker(map).apply {
-                                position = GeoPoint(member.destinationLat, member.destinationLon)
-                                icon = destinationMarkerDrawable(context, member)
+                                position = point
+                                icon = memberMarkerDrawable(context, member)
                                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                                title = member.destinationName
-                                snippet = member.name + " destination"
+                                title = member.name
+                                snippet = member.speed.toString() + " km/h • " + member.motion
                                 setOnMarkerClickListener { _, _ ->
                                     selectedId = member.id
+                                    followSelected = true
+                                    map.controller.animateTo(point)
                                     true
                                 }
                             }
                         )
                     }
-                }
 
-                // Current position of every family member is always shown.
-                locatedMembers.forEach { member ->
-                    val p = GeoPoint(member.lat!!, member.lon!!)
-                    map.overlays.add(
-                        Marker(map).apply {
-                            position = p
-                            icon = memberMarkerDrawable(context, member)
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                            title = member.name
-                            snippet = member.speed.toString() + " km/h • " + member.motion
-                            setOnMarkerClickListener { _, _ ->
-                                selectedId = member.id
-                                map.controller.animateTo(p)
-                                true
-                            }
+                    if (followSelected) {
+                        val member = members.firstOrNull { it.id == selectedId }
+                        if (member?.lat != null && member.lon != null) {
+                            map.controller.animateTo(GeoPoint(member.lat, member.lon))
                         }
-                    )
-                }
-
-                if (!didInitialFocus && locatedMembers.isNotEmpty()) {
-                    val focusMember = selected ?: locatedMembers.first()
-                    val points = mutableListOf<GeoPoint>()
-                    focusMember.lat?.let { lat -> focusMember.lon?.let { lon -> points.add(GeoPoint(lat, lon)) } }
-                    focusMember.routePoints.forEach { points.add(GeoPoint(it.lat, it.lon)) }
-                    focusMember.destinationLat?.let { lat -> focusMember.destinationLon?.let { lon -> points.add(GeoPoint(lat, lon)) } }
-
-                    if (points.size >= 2) {
-                        val north = points.maxOf { it.latitude }
-                        val south = points.minOf { it.latitude }
-                        val east = points.maxOf { it.longitude }
-                        val west = points.minOf { it.longitude }
-                        map.zoomToBoundingBox(org.osmdroid.util.BoundingBox(north, east, south, west), true, 90)
-                    } else {
-                        map.controller.setZoom(14.0)
-                        map.controller.setCenter(fallbackCenter)
                     }
-                    didInitialFocus = true
+
+                    map.invalidate()
+                    mapError = null
+                }.onFailure {
+                    mapError = "Map rendering recovered from an error: " + (it.message ?: "unknown")
                 }
-                map.invalidate()
             }
         )
 
-        // Compact top controls only; keep the map itself uncluttered.
         Surface(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = .96f),
-            shape = RoundedCornerShape(19.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = .97f),
+            shape = RoundedCornerShape(18.dp),
             shadowElevation = 8.dp
         ) {
-            Row(Modifier.padding(horizontal = 13.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Box(
-                    Modifier.size(38.dp).background(PurpleSoft, RoundedCornerShape(12.dp)),
+                    Modifier.size(36.dp).background(PurpleSoft, RoundedCornerShape(11.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.Map, null, tint = Purple, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.Map, null, tint = Purple, modifier = Modifier.size(19.dp))
                 }
-                Spacer(Modifier.width(9.dp))
+                Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Family Live Map", fontWeight = FontWeight.Black, fontSize = 14.5.sp)
+                    Text("Family Live Map", fontWeight = FontWeight.Black, fontSize = 14.sp)
                     Text(
                         when {
-                            locatedMembers.isEmpty() -> "No family location is being shared"
-                            locatedMembers.any { it.destinationName != null } ->
-                                locatedMembers.size.toString() + " live • road trips shown on map"
-                            else -> locatedMembers.size.toString() + " live member" + if (locatedMembers.size == 1) "" else "s"
+                            locatedMembers.isEmpty() -> "Waiting for a shared family location"
+                            locatedMembers.any { it.tripActive } ->
+                                locatedMembers.size.toString() + " live • active trips shown by road"
+                            else -> locatedMembers.size.toString() + " live family member" + if (locatedMembers.size == 1) "" else "s"
                         },
                         color = Muted,
-                        fontSize = 9.8.sp
+                        fontSize = 9.5.sp
                     )
                 }
-                if (!trackingEnabled) {
-                    FilledTonalButton(onClick = onStartTracking, shape = RoundedCornerShape(12.dp)) {
-                        Icon(Icons.Default.MyLocation, null, Modifier.size(15.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text("Share mine", fontSize = 10.sp)
+
+                IconButton(onClick = {
+                    followSelected = !followSelected
+                    if (followSelected) {
+                        selected?.let { m ->
+                            if (m.lat != null && m.lon != null) mapView.controller.animateTo(GeoPoint(m.lat, m.lon))
+                        }
                     }
+                }) {
+                    Icon(
+                        if (followSelected) Icons.Default.GpsFixed else Icons.Default.GpsNotFixed,
+                        "Follow selected",
+                        tint = if (followSelected) Purple else Muted
+                    )
+                }
+
+                IconButton(onClick = { fitSelectedRoute() }) {
+                    Icon(Icons.Default.CropFree, "Fit selected route", tint = Purple)
+                }
+
+                if (!trackingEnabled) {
+                    IconButton(onClick = onStartTracking) {
+                        Icon(Icons.Default.MyLocation, "Share my location", tint = Purple)
+                    }
+                }
+            }
+        }
+
+        mapError?.let { message ->
+            Surface(
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 76.dp, start = 12.dp, end = 12.dp),
+                color = RoseSoft,
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Text(message, Modifier.padding(10.dp), color = Color(0xFF8E2B3D), fontSize = 9.5.sp)
+            }
+        }
+
+        if (locatedMembers.isEmpty()) {
+            Surface(
+                modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = .96f),
+                shape = RoundedCornerShape(20.dp),
+                shadowElevation = 6.dp
+            ) {
+                Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.LocationSearching, null, tint = Purple, modifier = Modifier.size(30.dp))
+                    Spacer(Modifier.height(7.dp))
+                    Text("No live location yet", fontWeight = FontWeight.Black)
+                    Text(
+                        "On at least one family phone, turn on location sharing and allow precise location.",
+                        textAlign = TextAlign.Center,
+                        color = Muted,
+                        fontSize = 10.sp
+                    )
                 }
             }
         }
 
         Column(
             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
             if (locatedMembers.size > 1) {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
                     items(locatedMembers, key = { it.id }) { member ->
                         val active = member.id == selected?.id
                         Surface(
                             modifier = Modifier.clickable {
                                 selectedId = member.id
-                                didInitialFocus = false
+                                followSelected = true
                             },
-                            color = if (active) Purple else MaterialTheme.colorScheme.surface.copy(alpha=.96f),
+                            color = if (active) Purple else MaterialTheme.colorScheme.surface.copy(alpha = .97f),
                             contentColor = if (active) Color.White else MaterialTheme.colorScheme.onSurface,
-                            shape = RoundedCornerShape(14.dp),
-                            shadowElevation = 5.dp
+                            shape = RoundedCornerShape(13.dp),
+                            shadowElevation = 4.dp
                         ) {
-                            Row(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Box(
-                                    Modifier.size(23.dp).background(if (active) Color.White.copy(alpha=.2f) else avatarColor(member.id), CircleShape),
+                                    Modifier.size(22.dp).background(
+                                        if (active) Color.White.copy(alpha = .18f) else avatarColor(member.id),
+                                        CircleShape
+                                    ),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text(member.name.take(1).uppercase(), fontSize = 9.sp, fontWeight = FontWeight.Black, color = Color.White)
+                                    Text(
+                                        member.name.take(1).uppercase(),
+                                        fontSize = 8.5.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = Color.White
+                                    )
                                 }
-                                Spacer(Modifier.width(6.dp))
-                                Text(member.name, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
-                                if (member.speed > 0) {
-                                    Spacer(Modifier.width(5.dp))
-                                    Text("• " + member.speed + " km/h", fontSize = 9.5.sp)
-                                }
+                                Spacer(Modifier.width(5.dp))
+                                Text(member.name, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                                Spacer(Modifier.width(5.dp))
+                                Text(member.speed.toString() + " km/h", fontSize = 9.sp)
                             }
                         }
                     }
@@ -872,31 +1033,37 @@ fun LiveFamilyMap(
 
             selected?.let { member ->
                 Surface(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 10.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha=.98f),
-                    shape = RoundedCornerShape(22.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 9.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = .985f),
+                    shape = RoundedCornerShape(21.dp),
                     shadowElevation = 10.dp
                 ) {
-                    Column(Modifier.padding(14.dp)) {
+                    Column(Modifier.padding(13.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
-                                Modifier.size(43.dp).background(avatarColor(member.id), CircleShape),
+                                Modifier.size(41.dp).background(avatarColor(member.id), CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(member.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Black)
                             }
-                            Spacer(Modifier.width(10.dp))
+                            Spacer(Modifier.width(9.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(member.name, fontWeight = FontWeight.Black, fontSize = 15.sp)
-                                Text(member.motion + " • updated " + ageText(member.updatedAt), color = Muted, fontSize = 9.8.sp)
+                                Text(member.name, fontWeight = FontWeight.Black, fontSize = 14.5.sp)
+                                Text(
+                                    member.motion + " • " + ageText(member.updatedAt) +
+                                        (member.accuracyM?.let { " • ±" + it.toInt() + " m" } ?: ""),
+                                    color = Muted,
+                                    fontSize = 9.4.sp
+                                )
                             }
                             StatusPill(member.speed.toString() + " km/h", PurpleSoft, Purple)
                         }
 
-                        Spacer(Modifier.height(10.dp))
-
+                        Spacer(Modifier.height(9.dp))
                         Row(
-                            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(14.dp)).padding(10.dp),
+                            Modifier.fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(13.dp))
+                                .padding(9.dp),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             SmallMetric("Current", member.speed.toString() + " km/h")
@@ -905,33 +1072,35 @@ fun LiveFamilyMap(
                             SmallMetric("Battery", if (member.battery >= 0) member.battery.toString() + "%" else "Private")
                         }
 
-                        member.destinationName?.let { destination ->
-                            Spacer(Modifier.height(10.dp))
+                        if (member.tripActive && member.destinationName != null) {
+                            Spacer(Modifier.height(9.dp))
                             Row(
-                                Modifier.fillMaxWidth().background(PurpleSoft, RoundedCornerShape(14.dp)).padding(11.dp),
+                                Modifier.fillMaxWidth().background(PurpleSoft, RoundedCornerShape(13.dp)).padding(10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    Modifier.size(37.dp).background(Color.White.copy(alpha=.72f), CircleShape),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(Icons.Default.Flag, null, tint = Purple, modifier = Modifier.size(20.dp))
-                                }
-                                Spacer(Modifier.width(9.dp))
+                                Icon(Icons.Default.Navigation, null, tint = Purple, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text("Going to " + destination, fontWeight = FontWeight.Black, fontSize = 12.sp, color = Ink)
-                                    val roadDistance = member.remainingM?.let {
+                                    Text(
+                                        "Going to " + member.destinationName,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 11.5.sp,
+                                        color = Ink
+                                    )
+                                    val distanceText = member.remainingM?.let {
                                         if (it < 1000f) it.toInt().toString() + " m by road"
                                         else "%.1f km by road".format(it / 1000f)
                                     } ?: "Road distance updating"
                                     Text(
-                                        roadDistance + (member.etaMinutes?.let { " • ETA " + it + " min" } ?: ""),
-                                        color = Ink.copy(alpha=.68f),
-                                        fontSize = 10.sp
+                                        distanceText +
+                                            (member.etaMinutes?.let { " • ETA " + it + " min" } ?: "") +
+                                            if (routeCache[member.id]?.points?.size ?: 0 >= 2) " • route loaded" else " • route loading",
+                                        color = Ink.copy(alpha = .67f),
+                                        fontSize = 9.6.sp
                                     )
                                 }
-                                if (member.routePoints.size >= 2) {
-                                    StatusPill("ROUTE", Color.White.copy(alpha=.8f), Purple)
+                                TextButton(onClick = { fitSelectedRoute() }) {
+                                    Text("FIT", fontSize = 9.sp, fontWeight = FontWeight.Black)
                                 }
                             }
                         }
