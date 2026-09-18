@@ -798,6 +798,63 @@ fun LiveFamilyMap(
     }
 }
 
+private fun destinationMarkerDrawable(context: Context, member: CloudMember): BitmapDrawable {
+    val w = 220
+    val h = 78
+    val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+
+    val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xF7FFFFFF.toInt() }
+    val rect = RectF(4f, 4f, (w - 4).toFloat(), 64f)
+    canvas.drawRoundRect(rect, 22f, 22f, bg)
+
+    val circle = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Purple.toArgb() }
+    canvas.drawCircle(31f, 34f, 20f, circle)
+
+    val flagPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+    }
+    canvas.drawLine(25f, 22f, 25f, 47f, flagPaint)
+    val flagFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = Paint.Style.FILL
+    }
+    val flag = android.graphics.Path().apply {
+        moveTo(27f, 22f)
+        lineTo(45f, 28f)
+        lineTo(27f, 34f)
+        close()
+    }
+    canvas.drawPath(flag, flagFill)
+
+    val title = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF171829.toInt()
+        textSize = 19f
+        typeface = Typeface.DEFAULT_BOLD
+    }
+    val sub = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Purple.toArgb()
+        textSize = 15f
+        typeface = Typeface.DEFAULT_BOLD
+    }
+    canvas.drawText((member.destinationName ?: "Destination").take(18), 60f, 29f, title)
+    val info = (member.etaMinutes?.let { "ETA " + it + " min" } ?: "Destination") +
+        (member.remainingM?.let { " • " + if (it < 1000f) it.toInt().toString() + " m" else "%.1f km".format(it / 1000f) } ?: "")
+    canvas.drawText(info.take(24), 60f, 51f, sub)
+
+    val pin = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xF7FFFFFF.toInt() }
+    val path = android.graphics.Path().apply {
+        moveTo(98f, 63f)
+        lineTo(110f, 77f)
+        lineTo(122f, 63f)
+        close()
+    }
+    canvas.drawPath(path, pin)
+    return BitmapDrawable(context.resources, bitmap)
+}
+
 private fun memberMarkerDrawable(context: Context, member: CloudMember): BitmapDrawable {
     val w = 260
     val h = 92
