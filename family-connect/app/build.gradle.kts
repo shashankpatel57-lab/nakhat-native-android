@@ -12,12 +12,25 @@ android {
         applicationId = "com.familyconnect.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0-preview"
+        versionCode = 2
+        versionName = "2.0.0-preview"
+    }
+
+    signingConfigs {
+        create("familyTest") {
+            storeFile = file("../familyconnect-test.jks")
+            storePassword = "familyconnect"
+            keyAlias = "familyconnect"
+            keyPassword = "familyconnect"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("familyTest")
+        }
         release {
+            signingConfig = signingConfigs.getByName("familyTest")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
