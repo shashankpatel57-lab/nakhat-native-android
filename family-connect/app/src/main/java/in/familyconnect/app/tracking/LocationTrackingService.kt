@@ -26,6 +26,7 @@ class LocationTrackingService : Service() {
     private var overspeedSent = false
     private var lastAccepted: Location? = null
     private val speedSamples = ArrayDeque<Float>()
+    private var stationarySamples = 0
     @Volatile private var cloudSyncRunning = false
     @Volatile private var rerouteRunning = false
 
@@ -42,10 +43,28 @@ class LocationTrackingService : Service() {
             }
 
             val rawKmh = l.speed.coerceAtLeast(0f) * 3.6f
-            speedSamples.addLast(rawKmh)
-            while (speedSamples.size > 5) speedSamples.removeFirst()
-            val smoothed = if (speedSamples.isNotEmpty()) speedSamples.average().toFloat() else rawKmh
-            val speed = smoothed.roundToInt().coerceAtLeast(0)
+            val speedAccuracyKmh = if (android.os.Build.VERSION.SDK_INT >= 26 && l.hasSpeedAccuracy()) {
+                (l.speedAccuracyMetersPerSecond * 3.6f).coerceAtLeast(0f)
+            } else 3f
+            val movementM = previous?.distanceTo(l) ?: 999f
+            val zeroThreshold = maxOf(3.0f, minOf(6.0f, speedAccuracyKmh))
+            val candidate = if (
+                rawKmh < zeroThreshold ||
+                (previous != null && movementM < 6f && rawKmh < 8f)
+            ) 0f else rawKmh
+
+            if (candidate == 0f) {
+                stationarySamples++
+                if (stationarySamples >= 1) speedSamples.clear()
+            } else {
+                stationarySamples = 0
+                speedSamples.addLast(candidate)
+                while (speedSamples.size > 5) speedSamples.removeFirst()
+            }
+
+            val smoothed = if (candidate == 0f || speedSamples.isEmpty()) 0f
+                else speedSamples.sorted()[speedSamples.size / 2]
+            val speed = if (smoothed < 3.5f) 0 else smoothed.roundToInt().coerceAtLeast(0)
 
             getSharedPreferences("tracking", MODE_PRIVATE).edit()
                 .putLong("lat", java.lang.Double.doubleToRawLongBits(l.latitude))
@@ -187,6 +206,7 @@ class LocationTrackingService : Service() {
             val body = "Trip completed • max " + maxSpeed + " km/h • average " + avg + " km/h"
             notifyEvent(7411, "TRIP_ARRIVED", "Arrived at " + name, body)
             AppPrefs.stopTrip(this)
+            Thread { FamilyCloud.clearTripRoute(this) }.start()
         }
     }
 
@@ -251,6 +271,7 @@ class LocationTrackingService : Service() {
                 ).getOrNull()
                 if (route != null) {
                     AppPrefs.updateTripRoute(this, route)
+                    FamilyCloud.setTripRoute(this, route)
                     getSharedPreferences("family_connect_state", MODE_PRIVATE).edit()
                         .putInt("trip_route_index", 0)
                         .apply()
