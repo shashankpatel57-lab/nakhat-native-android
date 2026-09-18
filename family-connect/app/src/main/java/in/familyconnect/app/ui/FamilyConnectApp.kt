@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.familyconnect.app.ExternalDestinationShare
 import com.familyconnect.app.cloud.CloudState
 import com.familyconnect.app.cloud.FamilyCloud
 import com.familyconnect.app.data.DeviceRepository
@@ -233,12 +234,17 @@ private fun FamilyShell(onReset: () -> Unit) {
     val scope = rememberCoroutineScope()
     var screenName by rememberSaveable { mutableStateOf(AppScreen.Home.name) }
     val screen = AppScreen.valueOf(screenName)
+    val sharedDestinationText by ExternalDestinationShare.text.collectAsState()
     var snapshot by remember { mutableStateOf(DeviceRepository.snapshot(context)) }
     var cloudState by remember { mutableStateOf<CloudState?>(null) }
     var cloudBusy by remember { mutableStateOf(false) }
     var cloudError by remember { mutableStateOf<String?>(null) }
     var trackingEnabled by rememberSaveable {
         mutableStateOf(context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean("location_sharing", false))
+    }
+
+    LaunchedEffect(sharedDestinationText) {
+        if (sharedDestinationText != null) screenName = AppScreen.Home.name
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
