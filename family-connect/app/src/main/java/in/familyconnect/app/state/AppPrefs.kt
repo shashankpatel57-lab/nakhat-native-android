@@ -2,6 +2,7 @@ package com.familyconnect.app.state
 
 import android.content.Context
 import android.util.Base64
+import org.json.JSONArray
 import org.json.JSONObject
 
 data class SavedPlace(
@@ -11,6 +12,14 @@ data class SavedPlace(
     val lon: Double,
     val radiusM: Float = 180f,
     val watchMemberId: String? = null
+)
+
+data class RoutePoint(val lat: Double, val lon: Double)
+
+data class RoadRoute(
+    val points: List<RoutePoint>,
+    val distanceM: Float,
+    val durationS: Int
 )
 
 data class TripSnapshot(
@@ -23,7 +32,11 @@ data class TripSnapshot(
     val averageSpeed: Int = 0,
     val maxSpeed: Int = 0,
     val etaMinutes: Int? = null,
-    val startedAt: Long = 0L
+    val startedAt: Long = 0L,
+    val routePoints: List<RoutePoint> = emptyList(),
+    val routeDistanceM: Float? = null,
+    val routeDurationS: Int? = null,
+    val lastRerouteAt: Long = 0L
 )
 
 data class InvitePayload(
@@ -42,9 +55,10 @@ object AppPrefs {
     fun cloudBlobId(c: Context): String = p(c).getString("cloud_blob_id", "") ?: ""
     fun cloudKey(c: Context): String = p(c).getString("cloud_key", "") ?: ""
     fun isOwner(c: Context): Boolean = p(c).getBoolean("family_owner", false)
+
     fun setupComplete(c: Context): Boolean =
-        profileName(c).isNotBlank() && familyName(c).isNotBlank() && memberId(c).isNotBlank() &&
-            cloudBlobId(c).isNotBlank() && cloudKey(c).isNotBlank()
+        profileName(c).isNotBlank() && familyName(c).isNotBlank() &&
+            memberId(c).isNotBlank() && cloudBlobId(c).isNotBlank() && cloudKey(c).isNotBlank()
 
     fun saveCloudSetup(
         c: Context,
@@ -99,62 +113,37 @@ object AppPrefs {
         val list = places(c).toMutableList()
         val index = list.indexOfFirst { it.id == place.id || it.name.equals(place.name, ignoreCase = true) }
         if (index >= 0) list[index] = place else list.add(place)
-        val arr = org.json.JSONArray()
-        list.forEach {
-            arr.put(
-                JSONObject()
-                    .put("id", it.id)
-                    .put("name", it.name)
-                    .put("lat", it.lat)
-                    .put("lon", it.lon)
-                    .put("radius", it.radiusM.toDouble())
-                    .put("watchMemberId", it.watchMemberId ?: JSONObject.NULL)
-            )
-        }
-        p(c).edit().putString("places", arr.toString()).apply()
+        replacePlaces(c, list)
     }
 
     fun deletePlace(c: Context, id: String) {
-        val arr = org.json.JSONArray()
-        places(c).filterNot { it.id == id }.forEach {
-            arr.put(
-                JSONObject()
-                    .put("id", it.id)
-                    .put("name", it.name)
-                    .put("lat", it.lat)
-                    .put("lon", it.lon)
-                    .put("radius", it.radiusM.toDouble())
-            )
-        }
-        p(c).edit().putString("places", arr.toString()).apply()
+        replacePlaces(c, places(c).filterNot { it.id == id })
     }
 
     fun places(c: Context): List<SavedPlace> {
         return try {
-            val arr = org.json.JSONArray(p(c).getString("places", "[]") ?: "[]")
+            val arr = JSONArray(p(c).getString("places", "[]") ?: "[]")
             buildList {
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
                     add(
                         SavedPlace(
-                            o.getString("id"),
-                            o.getString("name"),
-                            o.getDouble("lat"),
-                            o.getDouble("lon"),
-                            o.optDouble("radius", 180.0).toFloat(),
-                            if (o.has("watchMemberId") && !o.isNull("watchMemberId")) o.optString("watchMemberId").takeIf { it.isNotBlank() } else null
+                            id = o.getString("id"),
+                            name = o.getString("name"),
+                            lat = o.getDouble("lat"),
+                            lon = o.getDouble("lon"),
+                            radiusM = o.optDouble("radius", 180.0).toFloat(),
+                            watchMemberId = if (o.has("watchMemberId") && !o.isNull("watchMemberId"))
+                                o.optString("watchMemberId").takeIf { it.isNotBlank() } else null
                         )
                     )
                 }
             }
-        } catch (_: Exception) {
-            emptyList()
-        }
+        } catch (_: Exception) { emptyList() }
     }
 
-
     fun replacePlaces(c: Context, list: List<SavedPlace>) {
-        val arr = org.json.JSONArray()
+        val arr = JSONArray()
         list.forEach {
             arr.put(
                 JSONObject()
@@ -169,22 +158,37 @@ object AppPrefs {
         p(c).edit().putString("places", arr.toString()).apply()
     }
 
-    fun startTrip(c: Context, place: SavedPlace) {
+    fun startTrip(c: Context, place: SavedPlace, route: RoadRoute) {
         p(c).edit()
             .putBoolean("trip_active", true)
             .putString("trip_dest_name", place.name)
             .putLong("trip_dest_lat", java.lang.Double.doubleToRawLongBits(place.lat))
             .putLong("trip_dest_lon", java.lang.Double.doubleToRawLongBits(place.lon))
             .putLong("trip_started", System.currentTimeMillis())
-            .putFloat("trip_remaining", Float.NaN)
+            .putFloat("trip_remaining", route.distanceM)
             .putInt("trip_current", 0)
             .putInt("trip_avg", 0)
             .putInt("trip_max", 0)
             .putFloat("trip_distance_m", 0f)
             .putLong("trip_moving_seconds", 0L)
-            .putInt("trip_eta", -1)
+            .putInt("trip_eta", ((route.durationS + 59) / 60).coerceAtLeast(1))
+            .putString("trip_route_points", encodeRoute(route.points))
+            .putFloat("trip_route_distance_m", route.distanceM)
+            .putInt("trip_route_duration_s", route.durationS)
+            .putLong("trip_last_reroute", System.currentTimeMillis())
             .putBoolean("trip_1km_alert", false)
             .putBoolean("trip_arrived_alert", false)
+            .apply()
+    }
+
+    fun updateTripRoute(c: Context, route: RoadRoute) {
+        p(c).edit()
+            .putString("trip_route_points", encodeRoute(route.points))
+            .putFloat("trip_route_distance_m", route.distanceM)
+            .putInt("trip_route_duration_s", route.durationS)
+            .putFloat("trip_remaining", route.distanceM)
+            .putInt("trip_eta", ((route.durationS + 59) / 60).coerceAtLeast(1))
+            .putLong("trip_last_reroute", System.currentTimeMillis())
             .apply()
     }
 
@@ -192,6 +196,7 @@ object AppPrefs {
         p(c).edit()
             .putBoolean("trip_active", false)
             .putInt("trip_current", 0)
+            .putString("trip_route_points", "[]")
             .apply()
     }
 
@@ -200,6 +205,8 @@ object AppPrefs {
         val active = prefs.getBoolean("trip_active", false)
         val hasDest = prefs.contains("trip_dest_lat") && prefs.contains("trip_dest_lon")
         val rem = prefs.getFloat("trip_remaining", Float.NaN)
+        val routeDistance = prefs.getFloat("trip_route_distance_m", Float.NaN)
+        val routeDuration = prefs.getInt("trip_route_duration_s", -1)
         return TripSnapshot(
             active = active,
             destinationName = prefs.getString("trip_dest_name", null),
@@ -210,8 +217,30 @@ object AppPrefs {
             averageSpeed = prefs.getInt("trip_avg", 0),
             maxSpeed = prefs.getInt("trip_max", 0),
             etaMinutes = prefs.getInt("trip_eta", -1).takeIf { it >= 0 },
-            startedAt = prefs.getLong("trip_started", 0L)
+            startedAt = prefs.getLong("trip_started", 0L),
+            routePoints = decodeRoute(prefs.getString("trip_route_points", "[]") ?: "[]"),
+            routeDistanceM = if (routeDistance.isNaN()) null else routeDistance,
+            routeDurationS = routeDuration.takeIf { it >= 0 },
+            lastRerouteAt = prefs.getLong("trip_last_reroute", 0L)
         )
+    }
+
+    private fun encodeRoute(points: List<RoutePoint>): String {
+        val arr = JSONArray()
+        points.forEach { arr.put(JSONArray().put(it.lat).put(it.lon)) }
+        return arr.toString()
+    }
+
+    private fun decodeRoute(raw: String): List<RoutePoint> {
+        return try {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val p = arr.optJSONArray(i) ?: continue
+                    if (p.length() >= 2) add(RoutePoint(p.optDouble(0), p.optDouble(1)))
+                }
+            }
+        } catch (_: Exception) { emptyList() }
     }
 
     fun lastSeenEventTime(c: Context): Long = p(c).getLong("last_event_time", 0L)
