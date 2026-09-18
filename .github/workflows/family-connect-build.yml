@@ -3,7 +3,7 @@ name: Family Connect Android Build
 on:
   push:
     branches:
-      - build/family-connect-v1
+      - build/family-connect-v2
     paths:
       - 'family-connect/**'
       - '.github/workflows/family-connect-build.yml'
@@ -30,17 +30,21 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Decode stable test signing key
+        working-directory: family-connect
+        run: base64 -d test-signing-keystore.b64 > familyconnect-test.jks
+
       - name: Build debug APK
         working-directory: family-connect
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Prepare APK
-        run: cp family-connect/app/build/outputs/apk/debug/app-debug.apk FamilyConnect-v1-preview.apk
+        run: cp family-connect/app/build/outputs/apk/debug/app-debug.apk FamilyConnect-v2-preview.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FamilyConnect-v1-preview
-          path: FamilyConnect-v1-preview.apk
+          name: FamilyConnect-v2-preview
+          path: FamilyConnect-v2-preview.apk
           if-no-files-found: error
           retention-days: 7
