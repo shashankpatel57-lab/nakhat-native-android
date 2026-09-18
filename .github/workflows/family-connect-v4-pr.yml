@@ -51,7 +51,8 @@ jobs:
             "routePoints":route["points"],"routeDistanceM":route["distanceM"],"routeDurationS":route["durationS"]
           }})
           state=call({"action":"get_state","circleId":cid,"secret":secret})
-          ms=state["state"]["members"][0]["member_state"][0]
+          raw=state["state"]["members"][0]["member_state"]
+          ms=raw[0] if isinstance(raw,list) else raw
           assert len(ms["route_points"]) > 5, ms
           assert ms["destination_name"] == "Destination", ms
           call({"action":"delete_family","circleId":cid,"secret":secret,"memberId":owner})
