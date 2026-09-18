@@ -217,8 +217,12 @@ object FamilyCloud {
         val members = buildList {
             for (i in 0 until membersJson.length()) {
                 val m = membersJson.optJSONObject(i) ?: continue
-                val stateArray = m.optJSONArray("member_state")
-                val state = stateArray?.optJSONObject(0) ?: JSONObject()
+                val rawState = m.opt("member_state")
+                val state = when (rawState) {
+                    is JSONObject -> rawState
+                    is JSONArray -> rawState.optJSONObject(0) ?: JSONObject()
+                    else -> JSONObject()
+                }
                 val routePoints = decodeRoute(state.optJSONArray("route_points"))
                 add(
                     CloudMember(
