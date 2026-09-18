@@ -336,12 +336,12 @@ private fun FamilyShell(onReset: () -> Unit) {
                 AppScreen.Family -> FamilyAndPlacesScreen(
                     snapshot = snapshot,
                     cloud = cloudState,
-                    onRefresh = { scope.launch { refreshCloud() } }
+                    onRefresh = { scope.launch { refreshCloud(true) } }
                 )
                 AppScreen.Safety -> SafetyCentre(
                     snapshot = snapshot,
                     onStartTracking = startTracking,
-                    onRefresh = { scope.launch { refreshCloud() } }
+                    onRefresh = { scope.launch { refreshCloud(true) } }
                 )
                 AppScreen.Profile -> PrivacyProfile(
                     snapshot = snapshot,
