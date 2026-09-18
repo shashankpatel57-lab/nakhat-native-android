@@ -24,6 +24,32 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Smoke test Supabase family backend
+        run: |
+          python - <<'PY'
+          import json, secrets, urllib.request
+          API = "https://fvpwjzgmqdtmdtfquvmi.supabase.co/functions/v1/family-api"
+          KEY = "sb_publishable_kZsea5gWYdoA8fY4-1onyQ_ambvq8ZS"
+          def call(payload):
+              data = json.dumps(payload).encode()
+              req = urllib.request.Request(API, data=data, method="POST", headers={"Content-Type":"application/json","apikey":KEY})
+              with urllib.request.urlopen(req, timeout=20) as r:
+                  body = json.loads(r.read().decode())
+              assert body.get("ok") is True, body
+              return body
+          secret = secrets.token_urlsafe(32)
+          created = call({"action":"create_family","familyName":"CI Family","memberName":"Owner CI","secret":secret})
+          cid, owner = created["circleId"], created["memberId"]
+          joined = call({"action":"join_family","circleId":cid,"secret":secret,"memberName":"Member CI"})
+          member = joined["memberId"]
+          state = call({"action":"get_state","circleId":cid,"secret":secret})
+          assert len(state["state"]["members"]) == 2, state
+          call({"action":"sync_state","circleId":cid,"secret":secret,"memberId":member,"state":{"latitude":26.8467,"longitude":80.9462,"speedKmh":42,"avgSpeedKmh":36,"maxSpeedKmh":58,"battery":73,"motion":"Driving","destinationName":"Home","destinationLat":26.85,"destinationLon":80.95,"remainingM":900,"etaMinutes":4,"tripActive":True}})
+          call({"action":"publish_event","circleId":cid,"secret":secret,"memberId":member,"type":"CI_TEST","title":"Backend test","body":"OK"})
+          call({"action":"delete_family","circleId":cid,"secret":secret,"memberId":owner})
+          print("Supabase backend smoke test passed")
+          PY
+
       - name: Decode stable test signing key
         working-directory: family-connect
         run: base64 -d test-signing-keystore.b64 > familyconnect-test.jks
