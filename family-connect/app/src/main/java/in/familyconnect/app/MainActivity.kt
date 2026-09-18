@@ -1,11 +1,11 @@
-package in.familyconnect.app
+package com.familyconnect.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
-import in.familyconnect.app.ui.FamilyConnectApp
-import in.familyconnect.app.ui.FamilyConnectTheme
+import com.familyconnect.app.ui.FamilyConnectApp
+import com.familyconnect.app.ui.FamilyConnectTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
