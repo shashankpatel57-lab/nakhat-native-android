@@ -3,6 +3,8 @@ package com.familyconnect.app.cloud
 import android.content.Context
 import android.util.Base64
 import com.familyconnect.app.state.AppPrefs
+import com.familyconnect.app.state.RoadRoute
+import com.familyconnect.app.state.RoutePoint
 import com.familyconnect.app.state.SavedPlace
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,7 +29,10 @@ data class CloudMember(
     val destinationLat: Double?,
     val destinationLon: Double?,
     val remainingM: Float?,
-    val etaMinutes: Int?
+    val etaMinutes: Int?,
+    val routePoints: List<RoutePoint>,
+    val routeDistanceM: Float?,
+    val routeDurationS: Int?
 )
 
 data class CloudEvent(
@@ -51,7 +56,7 @@ object FamilyCloud {
     private const val API = "https://fvpwjzgmqdtmdtfquvmi.supabase.co/functions/v1/family-api"
     private const val PUBLISHABLE_KEY = "sb_publishable_kZsea5gWYdoA8fY4-1onyQ_ambvq8ZS"
     private const val CONNECT_TIMEOUT = 10000
-    private const val READ_TIMEOUT = 10000
+    private const val READ_TIMEOUT = 12000
 
     fun createFamily(context: Context, personName: String, familyName: String): Result<String> = runCatching {
         val secret = randomSecret()
@@ -80,22 +85,42 @@ object FamilyCloud {
         )
         val memberId = response.getString("memberId")
         val actualFamily = response.optString("familyName", invite.familyName)
-        AppPrefs.saveCloudSetup(
-            context,
-            personName.trim(),
-            actualFamily,
-            memberId,
-            invite.blobId,
-            invite.keyB64,
-            false
-        )
-        parseState(response.optJSONObject("state") ?: JSONObject(), actualFamily)
+        AppPrefs.saveCloudSetup(context, personName.trim(), actualFamily, memberId, invite.blobId, invite.keyB64, false)
         actualFamily
     }
 
     fun pull(context: Context): Result<CloudState> = runCatching {
         val response = call(authPayload(context, "get_state"))
         parseState(response.getJSONObject("state"), response.optString("familyName", AppPrefs.familyName(context)))
+    }
+
+    fun roadRoute(
+        context: Context,
+        fromLat: Double,
+        fromLon: Double,
+        toLat: Double,
+        toLon: Double
+    ): Result<RoadRoute> = runCatching {
+        val response = call(
+            authPayload(context, "route")
+                .put("fromLat", fromLat)
+                .put("fromLon", fromLon)
+                .put("toLat", toLat)
+                .put("toLon", toLon)
+        )
+        val arr = response.getJSONArray("points")
+        val points = buildList {
+            for (i in 0 until arr.length()) {
+                val p = arr.optJSONArray(i) ?: continue
+                if (p.length() >= 2) add(RoutePoint(p.optDouble(0), p.optDouble(1)))
+            }
+        }
+        require(points.size >= 2) { "No usable road route returned" }
+        RoadRoute(
+            points = points,
+            distanceM = response.optDouble("distanceM", 0.0).toFloat(),
+            durationS = response.optInt("durationS", 0)
+        )
     }
 
     fun syncMyState(
@@ -108,6 +133,9 @@ object FamilyCloud {
     ): Result<CloudState> = runCatching {
         val trip = AppPrefs.trip(context)
         val tracking = context.getSharedPreferences("tracking", Context.MODE_PRIVATE)
+        val routeArray = JSONArray()
+        trip.routePoints.forEach { routeArray.put(JSONArray().put(it.lat).put(it.lon)) }
+
         val payload = authPayload(context, "sync_state")
             .put("memberId", AppPrefs.memberId(context))
             .put(
@@ -128,6 +156,9 @@ object FamilyCloud {
                     .put("remainingM", trip.remainingM ?: JSONObject.NULL)
                     .put("etaMinutes", trip.etaMinutes ?: JSONObject.NULL)
                     .put("tripActive", trip.active)
+                    .put("routePoints", if (trip.active && routeArray.length() > 1) routeArray else JSONObject.NULL)
+                    .put("routeDistanceM", trip.routeDistanceM ?: JSONObject.NULL)
+                    .put("routeDurationS", trip.routeDurationS ?: JSONObject.NULL)
             )
 
         val response = call(payload)
@@ -167,18 +198,12 @@ object FamilyCloud {
     }
 
     fun deletePlace(context: Context, placeId: String): Result<CloudState> = runCatching {
-        val response = call(
-            authPayload(context, "delete_place")
-                .put("placeId", placeId)
-        )
+        val response = call(authPayload(context, "delete_place").put("placeId", placeId))
         parseState(response.getJSONObject("state"), AppPrefs.familyName(context))
     }
 
     fun leaveFamily(context: Context): Result<Unit> = runCatching {
-        call(
-            authPayload(context, "leave_family")
-                .put("memberId", AppPrefs.memberId(context))
-        )
+        call(authPayload(context, "leave_family").put("memberId", AppPrefs.memberId(context)))
     }
 
     private fun authPayload(context: Context, action: String): JSONObject =
@@ -194,6 +219,7 @@ object FamilyCloud {
                 val m = membersJson.optJSONObject(i) ?: continue
                 val stateArray = m.optJSONArray("member_state")
                 val state = stateArray?.optJSONObject(0) ?: JSONObject()
+                val routePoints = decodeRoute(state.optJSONArray("route_points"))
                 add(
                     CloudMember(
                         id = m.optString("id"),
@@ -210,7 +236,10 @@ object FamilyCloud {
                         destinationLat = nullableDouble(state, "destination_lat"),
                         destinationLon = nullableDouble(state, "destination_lon"),
                         remainingM = nullableDouble(state, "remaining_m")?.toFloat(),
-                        etaMinutes = nullableDouble(state, "eta_minutes")?.toInt()
+                        etaMinutes = nullableDouble(state, "eta_minutes")?.toInt(),
+                        routePoints = routePoints,
+                        routeDistanceM = nullableDouble(state, "route_distance_m")?.toFloat(),
+                        routeDurationS = nullableDouble(state, "route_duration_s")?.toInt()
                     )
                 )
             }
@@ -257,6 +286,16 @@ object FamilyCloud {
         return CloudState(familyName, members, events, places)
     }
 
+    private fun decodeRoute(arr: JSONArray?): List<RoutePoint> {
+        if (arr == null) return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val p = arr.optJSONArray(i) ?: continue
+                if (p.length() >= 2) add(RoutePoint(p.optDouble(0), p.optDouble(1)))
+            }
+        }
+    }
+
     private fun call(payload: JSONObject): JSONObject {
         val c = (URL(API).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -268,8 +307,8 @@ object FamilyCloud {
             setRequestProperty("Accept", "application/json")
             setRequestProperty("apikey", PUBLISHABLE_KEY)
         }
-
         c.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+
         val status = c.responseCode
         val stream = if (status in 200..299) c.inputStream else c.errorStream
         val body = BufferedReader(InputStreamReader(stream)).use { it.readText() }
@@ -277,7 +316,7 @@ object FamilyCloud {
         if (status !in 200..299) {
             throw IllegalStateException(response.optString("error", "Cloud service returned HTTP " + status))
         }
-        if (response.optBoolean("ok", true).not()) {
+        if (!response.optBoolean("ok", true)) {
             throw IllegalStateException(response.optString("error", "Cloud request failed"))
         }
         return response
@@ -296,10 +335,6 @@ object FamilyCloud {
 
     private fun parseIsoMillis(value: String): Long {
         if (value.isBlank()) return 0L
-        return try {
-            java.time.Instant.parse(value).toEpochMilli()
-        } catch (_: Exception) {
-            0L
-        }
+        return try { java.time.Instant.parse(value).toEpochMilli() } catch (_: Exception) { 0L }
     }
 }
