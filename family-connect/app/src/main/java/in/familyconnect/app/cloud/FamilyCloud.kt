@@ -54,6 +54,12 @@ data class CloudState(
     val places: List<SavedPlace>
 )
 
+data class ResolvedDestination(
+    val name: String,
+    val lat: Double,
+    val lon: Double
+)
+
 object FamilyCloud {
     private const val API = "https://fvpwjzgmqdtmdtfquvmi.supabase.co/functions/v1/family-api"
     private const val PUBLISHABLE_KEY = "sb_publishable_kZsea5gWYdoA8fY4-1onyQ_ambvq8ZS"
@@ -94,6 +100,19 @@ object FamilyCloud {
     fun pull(context: Context): Result<CloudState> = runCatching {
         val response = call(authPayload(context, "get_state"))
         parseState(response.getJSONObject("state"), response.optString("familyName", AppPrefs.familyName(context)))
+    }
+
+
+    fun resolveMapShare(context: Context, sharedText: String): Result<ResolvedDestination> = runCatching {
+        val response = call(
+            authPayload(context, "resolve_map_share")
+                .put("sharedText", sharedText)
+        )
+        ResolvedDestination(
+            name = response.optString("name", "Google Maps destination"),
+            lat = response.getDouble("latitude"),
+            lon = response.getDouble("longitude")
+        )
     }
 
     fun roadRoute(
