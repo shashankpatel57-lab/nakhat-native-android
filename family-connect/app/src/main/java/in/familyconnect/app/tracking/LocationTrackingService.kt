@@ -148,7 +148,7 @@ class LocationTrackingService : Service() {
         if (remaining <= 1000f && remaining > 220f && !prefs.getBoolean("trip_1km_alert", false)) {
             val destinationName = prefs.getString("trip_dest_name", "destination") ?: "destination"
             val body = "About " + "%.1f".format(remaining / 1000f) + " km remaining" + if (eta > 0) " • ETA " + eta + " min" else ""
-            notifyEvent(7410, "Approaching " + destinationName, body)
+            notifyEvent(7410, "TRIP_APPROACHING", "Approaching " + destinationName, body)
             prefs.edit().putBoolean("trip_1km_alert", true).apply()
         }
 
