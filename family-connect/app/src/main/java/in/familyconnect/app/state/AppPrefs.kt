@@ -9,7 +9,8 @@ data class SavedPlace(
     val name: String,
     val lat: Double,
     val lon: Double,
-    val radiusM: Float = 180f
+    val radiusM: Float = 180f,
+    val watchMemberId: String? = null
 )
 
 data class TripSnapshot(
@@ -107,6 +108,7 @@ object AppPrefs {
                     .put("lat", it.lat)
                     .put("lon", it.lon)
                     .put("radius", it.radiusM.toDouble())
+                    .put("watchMemberId", it.watchMemberId ?: JSONObject.NULL)
             )
         }
         p(c).edit().putString("places", arr.toString()).apply()
@@ -139,7 +141,8 @@ object AppPrefs {
                             o.getString("name"),
                             o.getDouble("lat"),
                             o.getDouble("lon"),
-                            o.optDouble("radius", 180.0).toFloat()
+                            o.optDouble("radius", 180.0).toFloat(),
+                            if (o.has("watchMemberId") && !o.isNull("watchMemberId")) o.optString("watchMemberId").takeIf { it.isNotBlank() } else null
                         )
                     )
                 }
@@ -147,6 +150,23 @@ object AppPrefs {
         } catch (_: Exception) {
             emptyList()
         }
+    }
+
+
+    fun replacePlaces(c: Context, list: List<SavedPlace>) {
+        val arr = org.json.JSONArray()
+        list.forEach {
+            arr.put(
+                JSONObject()
+                    .put("id", it.id)
+                    .put("name", it.name)
+                    .put("lat", it.lat)
+                    .put("lon", it.lon)
+                    .put("radius", it.radiusM.toDouble())
+                    .put("watchMemberId", it.watchMemberId ?: JSONObject.NULL)
+            )
+        }
+        p(c).edit().putString("places", arr.toString()).apply()
     }
 
     fun startTrip(c: Context, place: SavedPlace) {
