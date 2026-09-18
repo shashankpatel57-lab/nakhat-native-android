@@ -11,10 +11,6 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.SecureRandom
-import java.util.UUID
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 data class CloudMember(
     val id: String,
@@ -52,53 +48,54 @@ data class CloudState(
 )
 
 object FamilyCloud {
-    private const val BASE = "https://jsonblob.com/api/jsonBlob"
-    private const val CONNECT_TIMEOUT = 9000
-    private const val READ_TIMEOUT = 9000
+    private const val API = "https://fvpwjzgmqdtmdtfquvmi.supabase.co/functions/v1/family-api"
+    private const val PUBLISHABLE_KEY = "sb_publishable_kZsea5gWYdoA8fY4-1onyQ_ambvq8ZS"
+    private const val CONNECT_TIMEOUT = 10000
+    private const val READ_TIMEOUT = 10000
 
     fun createFamily(context: Context, personName: String, familyName: String): Result<String> = runCatching {
-        val key = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        val memberId = UUID.randomUUID().toString()
-        val state = JSONObject()
-            .put("version", 2)
-            .put("familyName", familyName.trim())
-            .put("members", JSONArray().put(baseMember(memberId, personName.trim())))
-            .put("events", JSONArray())
-            .put("places", JSONArray())
-
-        val envelope = JSONObject().put("data", encrypt(state.toString(), key))
-        val connection = open(BASE, "POST")
-        connection.outputStream.use { it.write(envelope.toString().toByteArray()) }
-        val code = connection.responseCode
-        if (code !in 200..299) throw IllegalStateException("Cloud service returned HTTP " + code)
-        val location = connection.getHeaderField("Location") ?: connection.getHeaderField("location")
-            ?: throw IllegalStateException("Cloud service did not return a family ID")
-        val blobId = location.substringAfterLast("/")
-        val keyB64 = Base64.encodeToString(key, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        AppPrefs.saveCloudSetup(context, personName.trim(), familyName.trim(), memberId, blobId, keyB64, true)
+        val secret = randomSecret()
+        val response = call(
+            JSONObject()
+                .put("action", "create_family")
+                .put("familyName", familyName.trim())
+                .put("memberName", personName.trim())
+                .put("secret", secret)
+        )
+        val circleId = response.getString("circleId")
+        val memberId = response.getString("memberId")
+        val actualFamily = response.optString("familyName", familyName.trim())
+        AppPrefs.saveCloudSetup(context, personName.trim(), actualFamily, memberId, circleId, secret, true)
         AppPrefs.inviteCode(context)
     }
 
     fun joinFamily(context: Context, personName: String, code: String): Result<String> = runCatching {
         val invite = AppPrefs.decodeInvite(code)
-        val key = Base64.decode(invite.keyB64, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        val root = fetchRoot(invite.blobId, key)
-        val family = root.optString("familyName", invite.familyName)
-        val memberId = UUID.randomUUID().toString()
-        val members = root.optJSONArray("members") ?: JSONArray()
-        members.put(baseMember(memberId, personName.trim()))
-        root.put("members", dedupeMembers(members))
-        putRoot(invite.blobId, key, root)
-        AppPrefs.saveCloudSetup(context, personName.trim(), family, memberId, invite.blobId, invite.keyB64, false)
-        family
+        val response = call(
+            JSONObject()
+                .put("action", "join_family")
+                .put("circleId", invite.blobId)
+                .put("secret", invite.keyB64)
+                .put("memberName", personName.trim())
+        )
+        val memberId = response.getString("memberId")
+        val actualFamily = response.optString("familyName", invite.familyName)
+        AppPrefs.saveCloudSetup(
+            context,
+            personName.trim(),
+            actualFamily,
+            memberId,
+            invite.blobId,
+            invite.keyB64,
+            false
+        )
+        parseState(response.optJSONObject("state") ?: JSONObject(), actualFamily)
+        actualFamily
     }
 
     fun pull(context: Context): Result<CloudState> = runCatching {
-        val blobId = AppPrefs.cloudBlobId(context)
-        val keyB64 = AppPrefs.cloudKey(context)
-        require(blobId.isNotBlank() && keyB64.isNotBlank()) { "Family cloud is not configured" }
-        val key = Base64.decode(keyB64, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        parseState(fetchRoot(blobId, key))
+        val response = call(authPayload(context, "get_state"))
+        parseState(response.getJSONObject("state"), response.optString("familyName", AppPrefs.familyName(context)))
     }
 
     fun syncMyState(
@@ -109,196 +106,137 @@ object FamilyCloud {
         battery: Int,
         motion: String
     ): Result<CloudState> = runCatching {
-        val blobId = AppPrefs.cloudBlobId(context)
-        val keyB64 = AppPrefs.cloudKey(context)
-        val myId = AppPrefs.memberId(context)
-        val myName = AppPrefs.profileName(context)
-        require(blobId.isNotBlank() && keyB64.isNotBlank() && myId.isNotBlank()) { "Family cloud is not configured" }
-        val key = Base64.decode(keyB64, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        val root = fetchRoot(blobId, key)
-        val members = root.optJSONArray("members") ?: JSONArray()
         val trip = AppPrefs.trip(context)
+        val tracking = context.getSharedPreferences("tracking", Context.MODE_PRIVATE)
+        val payload = authPayload(context, "sync_state")
+            .put("memberId", AppPrefs.memberId(context))
+            .put(
+                "state",
+                JSONObject()
+                    .put("latitude", lat ?: JSONObject.NULL)
+                    .put("longitude", lon ?: JSONObject.NULL)
+                    .put("accuracyM", tracking.getFloat("accuracy", 0f).takeIf { it > 0f } ?: JSONObject.NULL)
+                    .put("speedKmh", speed)
+                    .put("avgSpeedKmh", trip.averageSpeed)
+                    .put("maxSpeedKmh", trip.maxSpeed)
+                    .put("battery", if (battery >= 0) battery else JSONObject.NULL)
+                    .put("charging", JSONObject.NULL)
+                    .put("motion", motion)
+                    .put("destinationName", trip.destinationName ?: JSONObject.NULL)
+                    .put("destinationLat", trip.destinationLat ?: JSONObject.NULL)
+                    .put("destinationLon", trip.destinationLon ?: JSONObject.NULL)
+                    .put("remainingM", trip.remainingM ?: JSONObject.NULL)
+                    .put("etaMinutes", trip.etaMinutes ?: JSONObject.NULL)
+                    .put("tripActive", trip.active)
+            )
 
-        val me = JSONObject()
-            .put("id", myId)
-            .put("name", myName)
-            .put("lat", lat ?: JSONObject.NULL)
-            .put("lon", lon ?: JSONObject.NULL)
-            .put("speed", speed)
-            .put("avgSpeed", trip.averageSpeed)
-            .put("maxSpeed", trip.maxSpeed)
-            .put("battery", battery)
-            .put("motion", motion)
-            .put("updatedAt", System.currentTimeMillis())
-            .put("tripActive", trip.active)
-            .put("destinationName", trip.destinationName ?: JSONObject.NULL)
-            .put("destinationLat", trip.destinationLat ?: JSONObject.NULL)
-            .put("destinationLon", trip.destinationLon ?: JSONObject.NULL)
-            .put("remainingM", trip.remainingM ?: JSONObject.NULL)
-            .put("etaMinutes", trip.etaMinutes ?: JSONObject.NULL)
-
-        val next = JSONArray()
-        var replaced = false
-        for (i in 0 until members.length()) {
-            val m = members.optJSONObject(i) ?: continue
-            if (m.optString("id") == myId) {
-                next.put(me)
-                replaced = true
-            } else {
-                next.put(m)
-            }
-        }
-        if (!replaced) next.put(me)
-        root.put("members", dedupeMembers(next))
-        putRoot(blobId, key, root)
-        parseState(root)
+        val response = call(payload)
+        parseState(response.getJSONObject("state"), response.optString("familyName", AppPrefs.familyName(context)))
     }
 
     fun publishEvent(context: Context, type: String, title: String, body: String): Result<Unit> = runCatching {
-        val blobId = AppPrefs.cloudBlobId(context)
-        val keyB64 = AppPrefs.cloudKey(context)
-        if (blobId.isBlank() || keyB64.isBlank()) return@runCatching
-        val key = Base64.decode(keyB64, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        val root = fetchRoot(blobId, key)
-        val events = root.optJSONArray("events") ?: JSONArray()
-        events.put(
-            JSONObject()
-                .put("id", UUID.randomUUID().toString())
+        if (!AppPrefs.setupComplete(context)) return@runCatching
+        call(
+            authPayload(context, "publish_event")
                 .put("memberId", AppPrefs.memberId(context))
-                .put("memberName", AppPrefs.profileName(context))
                 .put("type", type)
                 .put("title", title)
                 .put("body", body)
-                .put("createdAt", System.currentTimeMillis())
         )
-        val trimmed = JSONArray()
-        val start = (events.length() - 50).coerceAtLeast(0)
-        for (i in start until events.length()) trimmed.put(events.get(i))
-        root.put("events", trimmed)
-        putRoot(blobId, key, root)
     }
 
-
     fun upsertPlace(context: Context, place: SavedPlace): Result<CloudState> = runCatching {
-        val blobId = AppPrefs.cloudBlobId(context)
-        val keyB64 = AppPrefs.cloudKey(context)
-        require(blobId.isNotBlank() && keyB64.isNotBlank()) { "Family cloud is not configured" }
-        val key = Base64.decode(keyB64, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        val root = fetchRoot(blobId, key)
-        val current = root.optJSONArray("places") ?: JSONArray()
-        val next = JSONArray()
-        var replaced = false
-        for (i in 0 until current.length()) {
-            val o = current.optJSONObject(i) ?: continue
-            if (o.optString("id") == place.id) {
-                next.put(placeJson(place))
-                replaced = true
-            } else {
-                next.put(o)
-            }
-        }
-        if (!replaced) next.put(placeJson(place))
-        root.put("places", next)
-        putRoot(blobId, key, root)
-        parseState(root)
+        val response = call(
+            authPayload(context, "upsert_place")
+                .put(
+                    "place",
+                    JSONObject()
+                        .put("id", place.id)
+                        .put("name", place.name)
+                        .put("latitude", place.lat)
+                        .put("longitude", place.lon)
+                        .put("radiusM", place.radiusM.toDouble())
+                        .put("targetMemberId", place.watchMemberId ?: JSONObject.NULL)
+                        .put("approachDistanceM", 1000)
+                        .put("enterAlert", true)
+                        .put("exitAlert", true)
+                        .put("approachAlert", true)
+                )
+        )
+        parseState(response.getJSONObject("state"), AppPrefs.familyName(context))
     }
 
     fun deletePlace(context: Context, placeId: String): Result<CloudState> = runCatching {
-        val blobId = AppPrefs.cloudBlobId(context)
-        val keyB64 = AppPrefs.cloudKey(context)
-        require(blobId.isNotBlank() && keyB64.isNotBlank()) { "Family cloud is not configured" }
-        val key = Base64.decode(keyB64, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        val root = fetchRoot(blobId, key)
-        val current = root.optJSONArray("places") ?: JSONArray()
-        val next = JSONArray()
-        for (i in 0 until current.length()) {
-            val o = current.optJSONObject(i) ?: continue
-            if (o.optString("id") != placeId) next.put(o)
-        }
-        root.put("places", next)
-        putRoot(blobId, key, root)
-        parseState(root)
+        val response = call(
+            authPayload(context, "delete_place")
+                .put("placeId", placeId)
+        )
+        parseState(response.getJSONObject("state"), AppPrefs.familyName(context))
     }
 
-    private fun placeJson(place: SavedPlace): JSONObject = JSONObject()
-        .put("id", place.id)
-        .put("name", place.name)
-        .put("lat", place.lat)
-        .put("lon", place.lon)
-        .put("radius", place.radiusM.toDouble())
-        .put("watchMemberId", place.watchMemberId ?: JSONObject.NULL)
-
-    private fun baseMember(id: String, name: String): JSONObject = JSONObject()
-        .put("id", id)
-        .put("name", name)
-        .put("lat", JSONObject.NULL)
-        .put("lon", JSONObject.NULL)
-        .put("speed", 0)
-        .put("avgSpeed", 0)
-        .put("maxSpeed", 0)
-        .put("battery", 0)
-        .put("motion", "Not sharing")
-        .put("updatedAt", System.currentTimeMillis())
-        .put("tripActive", false)
-        .put("destinationName", JSONObject.NULL)
-        .put("destinationLat", JSONObject.NULL)
-        .put("destinationLon", JSONObject.NULL)
-        .put("remainingM", JSONObject.NULL)
-        .put("etaMinutes", JSONObject.NULL)
-
-    private fun dedupeMembers(input: JSONArray): JSONArray {
-        val map = LinkedHashMap<String, JSONObject>()
-        for (i in 0 until input.length()) {
-            val o = input.optJSONObject(i) ?: continue
-            val id = o.optString("id")
-            if (id.isNotBlank()) map[id] = o
-        }
-        return JSONArray().also { out -> map.values.forEach { out.put(it) } }
+    fun leaveFamily(context: Context): Result<Unit> = runCatching {
+        call(
+            authPayload(context, "leave_family")
+                .put("memberId", AppPrefs.memberId(context))
+        )
     }
 
-    private fun parseState(root: JSONObject): CloudState {
+    private fun authPayload(context: Context, action: String): JSONObject =
+        JSONObject()
+            .put("action", action)
+            .put("circleId", AppPrefs.cloudBlobId(context))
+            .put("secret", AppPrefs.cloudKey(context))
+
+    private fun parseState(root: JSONObject, familyName: String): CloudState {
         val membersJson = root.optJSONArray("members") ?: JSONArray()
         val members = buildList {
             for (i in 0 until membersJson.length()) {
                 val m = membersJson.optJSONObject(i) ?: continue
+                val stateArray = m.optJSONArray("member_state")
+                val state = stateArray?.optJSONObject(0) ?: JSONObject()
                 add(
                     CloudMember(
                         id = m.optString("id"),
                         name = m.optString("name", "Member"),
-                        lat = nullableDouble(m, "lat"),
-                        lon = nullableDouble(m, "lon"),
-                        speed = m.optInt("speed", 0),
-                        avgSpeed = m.optInt("avgSpeed", 0),
-                        maxSpeed = m.optInt("maxSpeed", 0),
-                        battery = m.optInt("battery", 0),
-                        motion = m.optString("motion", "Unknown"),
-                        updatedAt = m.optLong("updatedAt", 0L),
-                        destinationName = nullableString(m, "destinationName"),
-                        destinationLat = nullableDouble(m, "destinationLat"),
-                        destinationLon = nullableDouble(m, "destinationLon"),
-                        remainingM = nullableDouble(m, "remainingM")?.toFloat(),
-                        etaMinutes = nullableDouble(m, "etaMinutes")?.toInt()
+                        lat = nullableDouble(state, "latitude"),
+                        lon = nullableDouble(state, "longitude"),
+                        speed = state.optInt("speed_kmh", 0),
+                        avgSpeed = state.optInt("avg_speed_kmh", 0),
+                        maxSpeed = state.optInt("max_speed_kmh", 0),
+                        battery = if (state.has("battery") && !state.isNull("battery")) state.optInt("battery", 0) else -1,
+                        motion = state.optString("motion", "Not sharing").ifBlank { "Not sharing" },
+                        updatedAt = parseIsoMillis(state.optString("updated_at").ifBlank { m.optString("last_seen") }),
+                        destinationName = nullableString(state, "destination_name"),
+                        destinationLat = nullableDouble(state, "destination_lat"),
+                        destinationLon = nullableDouble(state, "destination_lon"),
+                        remainingM = nullableDouble(state, "remaining_m")?.toFloat(),
+                        etaMinutes = nullableDouble(state, "eta_minutes")?.toInt()
                     )
                 )
             }
         }
+
+        val memberNames = members.associate { it.id to it.name }
+
         val eventsJson = root.optJSONArray("events") ?: JSONArray()
         val events = buildList {
             for (i in 0 until eventsJson.length()) {
                 val e = eventsJson.optJSONObject(i) ?: continue
+                val memberId = e.optString("member_id")
                 add(
                     CloudEvent(
                         id = e.optString("id"),
-                        memberId = e.optString("memberId"),
-                        memberName = e.optString("memberName"),
-                        type = e.optString("type"),
+                        memberId = memberId,
+                        memberName = memberNames[memberId] ?: "Family",
+                        type = e.optString("event_type"),
                         title = e.optString("title"),
                         body = e.optString("body"),
-                        createdAt = e.optLong("createdAt")
+                        createdAt = parseIsoMillis(e.optString("created_at"))
                     )
                 )
             }
         }
+
         val placesJson = root.optJSONArray("places") ?: JSONArray()
         val places = buildList {
             for (i in 0 until placesJson.length()) {
@@ -307,15 +245,47 @@ object FamilyCloud {
                     SavedPlace(
                         id = p.optString("id"),
                         name = p.optString("name", "Place"),
-                        lat = p.optDouble("lat"),
-                        lon = p.optDouble("lon"),
-                        radiusM = p.optDouble("radius", 180.0).toFloat(),
-                        watchMemberId = nullableString(p, "watchMemberId")
+                        lat = p.optDouble("latitude"),
+                        lon = p.optDouble("longitude"),
+                        radiusM = p.optDouble("radius_m", 180.0).toFloat(),
+                        watchMemberId = nullableString(p, "target_member_id")
                     )
                 )
             }
         }
-        return CloudState(root.optString("familyName", "Family"), members, events, places)
+
+        return CloudState(familyName, members, events, places)
+    }
+
+    private fun call(payload: JSONObject): JSONObject {
+        val c = (URL(API).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = CONNECT_TIMEOUT
+            readTimeout = READ_TIMEOUT
+            doInput = true
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("apikey", PUBLISHABLE_KEY)
+        }
+
+        c.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+        val status = c.responseCode
+        val stream = if (status in 200..299) c.inputStream else c.errorStream
+        val body = BufferedReader(InputStreamReader(stream)).use { it.readText() }
+        val response = if (body.isBlank()) JSONObject() else JSONObject(body)
+        if (status !in 200..299) {
+            throw IllegalStateException(response.optString("error", "Cloud service returned HTTP " + status))
+        }
+        if (response.optBoolean("ok", true).not()) {
+            throw IllegalStateException(response.optString("error", "Cloud request failed"))
+        }
+        return response
+    }
+
+    private fun randomSecret(): String {
+        val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        return Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     }
 
     private fun nullableDouble(o: JSONObject, key: String): Double? =
@@ -324,56 +294,12 @@ object FamilyCloud {
     private fun nullableString(o: JSONObject, key: String): String? =
         if (!o.has(key) || o.isNull(key)) null else o.optString(key).takeIf { it.isNotBlank() }
 
-    private fun fetchRoot(blobId: String, key: ByteArray): JSONObject {
-        val c = open(BASE + "/" + blobId, "GET")
-        if (c.responseCode !in 200..299) throw IllegalStateException("Family not reachable (HTTP " + c.responseCode + ")")
-        val body = read(c)
-        val envelope = JSONObject(body)
-        return JSONObject(decrypt(envelope.getString("data"), key))
-    }
-
-    private fun putRoot(blobId: String, key: ByteArray, root: JSONObject) {
-        val c = open(BASE + "/" + blobId, "PUT")
-        val envelope = JSONObject().put("data", encrypt(root.toString(), key))
-        c.outputStream.use { it.write(envelope.toString().toByteArray()) }
-        if (c.responseCode !in 200..299) throw IllegalStateException("Family update failed (HTTP " + c.responseCode + ")")
-        c.inputStream.close()
-    }
-
-    private fun open(url: String, method: String): HttpURLConnection {
-        return (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = CONNECT_TIMEOUT
-            readTimeout = READ_TIMEOUT
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-            doInput = true
-            doOutput = method == "POST" || method == "PUT"
+    private fun parseIsoMillis(value: String): Long {
+        if (value.isBlank()) return 0L
+        return try {
+            java.time.Instant.parse(value).toEpochMilli()
+        } catch (_: Exception) {
+            0L
         }
-    }
-
-    private fun read(c: HttpURLConnection): String {
-        return BufferedReader(InputStreamReader(c.inputStream)).use { it.readText() }
-    }
-
-    private fun encrypt(plain: String, key: ByteArray): String {
-        val iv = ByteArray(12).also { SecureRandom().nextBytes(it) }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
-        val encrypted = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
-        val packed = ByteArray(iv.size + encrypted.size)
-        System.arraycopy(iv, 0, packed, 0, iv.size)
-        System.arraycopy(encrypted, 0, packed, iv.size, encrypted.size)
-        return Base64.encodeToString(packed, Base64.NO_WRAP)
-    }
-
-    private fun decrypt(packedB64: String, key: ByteArray): String {
-        val packed = Base64.decode(packedB64, Base64.NO_WRAP)
-        require(packed.size > 12) { "Invalid encrypted family data" }
-        val iv = packed.copyOfRange(0, 12)
-        val encrypted = packed.copyOfRange(12, packed.size)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
-        return String(cipher.doFinal(encrypted), Charsets.UTF_8)
     }
 }
