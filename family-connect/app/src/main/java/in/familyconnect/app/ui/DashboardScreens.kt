@@ -591,7 +591,7 @@ private fun CloudMemberCard(member: CloudMember, isMe: Boolean, onOpenMap: () ->
                     Column(Modifier.weight(1f)) {
                         Text("Going to " + destination, fontWeight = FontWeight.Bold, fontSize = 11.5.sp, color = Ink)
                         Text(
-                            (member.remainingM?.let { if (it < 1000f) it.toInt().toString() + " m away" else "%.1f km away".format(it / 1000f) } ?: "Distance updating") +
+                            (member.remainingM?.let { if (it < 1000f) it.toInt().toString() + " m by road" else "%.1f km by road".format(it / 1000f) } ?: "Road distance updating") +
                                 (member.etaMinutes?.let { " • ETA " + it + " min" } ?: ""),
                             color = Ink.copy(alpha=.66f),
                             fontSize = 9.8.sp
