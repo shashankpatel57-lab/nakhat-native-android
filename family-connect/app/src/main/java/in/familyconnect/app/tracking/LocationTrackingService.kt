@@ -59,7 +59,7 @@ class LocationTrackingService : Service() {
             } else {
                 stationarySamples = 0
                 speedSamples.addLast(candidate)
-                while (speedSamples.size > 5) speedSamples.removeFirst()
+                while (speedSamples.size > 3) speedSamples.removeFirst()
             }
 
             val smoothed = if (candidate == 0f || speedSamples.isEmpty()) 0f
