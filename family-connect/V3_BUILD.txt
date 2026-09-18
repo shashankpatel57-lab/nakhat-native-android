@@ -1,0 +1,1 @@
+Family Connect V3 uses Supabase project fvpwjzgmqdtmdtfquvmi. Backend smoke test is executed by CI before APK packaging.
