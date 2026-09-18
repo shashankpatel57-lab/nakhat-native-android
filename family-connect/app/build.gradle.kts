@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "in.familyconnect.app"
+    namespace = "com.familyconnect.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "in.familyconnect.app"
+        applicationId = "com.familyconnect.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
