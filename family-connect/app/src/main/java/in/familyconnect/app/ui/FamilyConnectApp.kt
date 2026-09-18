@@ -272,10 +272,10 @@ private fun FamilyShell(onReset: () -> Unit) {
         trackingEnabled = false
     }
 
-    val refreshCloud: suspend () -> Unit = {
-        cloudBusy = true
+    val refreshCloud: suspend (Boolean) -> Unit = { showBusy ->
+        if (showBusy) cloudBusy = true
         val result = withContext(Dispatchers.IO) { FamilyCloud.pull(context) }
-        cloudBusy = false
+        if (showBusy) cloudBusy = false
         result.onSuccess {
             cloudState = it
             AppPrefs.replacePlaces(context, it.places)
@@ -290,10 +290,20 @@ private fun FamilyShell(onReset: () -> Unit) {
         if (trackingEnabled && fine) {
             ContextCompat.startForegroundService(context, Intent(context, LocationTrackingService::class.java))
         }
+        refreshCloud(true)
+    }
+
+    LaunchedEffect(screenName) {
+        while (true) {
+            refreshCloud(false)
+            delay(if (screen == AppScreen.Map) 2200L else 5000L)
+        }
+    }
+
+    LaunchedEffect(Unit) {
         while (true) {
             snapshot = DeviceRepository.snapshot(context)
-            refreshCloud()
-            delay(4000L)
+            delay(1000L)
         }
     }
 
@@ -313,7 +323,7 @@ private fun FamilyShell(onReset: () -> Unit) {
                     cloudError = cloudError,
                     trackingEnabled = trackingEnabled,
                     onToggleTracking = { if (trackingEnabled) stopTracking() else startTracking() },
-                    onRefresh = { scope.launch { refreshCloud() } },
+                    onRefresh = { scope.launch { refreshCloud(true) } },
                     onOpenMap = { screenName = AppScreen.Map.name },
                     onOpenFamily = { screenName = AppScreen.Family.name }
                 )
