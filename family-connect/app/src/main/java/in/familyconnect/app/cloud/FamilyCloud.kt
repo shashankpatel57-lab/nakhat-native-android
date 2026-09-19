@@ -34,7 +34,10 @@ data class CloudMember(
     val tripActive: Boolean,
     val routeDistanceM: Float?,
     val routeDurationS: Int?,
-    val routeUpdatedAt: Long
+    val routeUpdatedAt: Long,
+    val locationVisible: Boolean,
+    val speedVisible: Boolean,
+    val batteryVisible: Boolean
 )
 
 data class CloudEvent(
@@ -60,6 +63,19 @@ data class ResolvedDestination(
     val lon: Double
 )
 
+data class ShortInvite(
+    val code: String,
+    val expiresAt: Long
+)
+
+data class SharingRule(
+    val viewerMemberId: String,
+    val viewerName: String,
+    val locationEnabled: Boolean,
+    val speedEnabled: Boolean,
+    val batteryEnabled: Boolean
+)
+
 object FamilyCloud {
     private const val API = "https://fvpwjzgmqdtmdtfquvmi.supabase.co/functions/v1/family-api"
     private const val PUBLISHABLE_KEY = "sb_publishable_kZsea5gWYdoA8fY4-1onyQ_ambvq8ZS"
@@ -79,29 +95,91 @@ object FamilyCloud {
         val memberId = response.getString("memberId")
         val actualFamily = response.optString("familyName", familyName.trim())
         AppPrefs.saveCloudSetup(context, personName.trim(), actualFamily, memberId, circleId, secret, true)
-        AppPrefs.inviteCode(context)
-    }
-
-    fun joinFamily(context: Context, personName: String, code: String): Result<String> = runCatching {
-        val invite = AppPrefs.decodeInvite(code)
-        val response = call(
-            JSONObject()
-                .put("action", "join_family")
-                .put("circleId", invite.blobId)
-                .put("secret", invite.keyB64)
-                .put("memberName", personName.trim())
-        )
-        val memberId = response.getString("memberId")
-        val actualFamily = response.optString("familyName", invite.familyName)
-        AppPrefs.saveCloudSetup(context, personName.trim(), actualFamily, memberId, invite.blobId, invite.keyB64, false)
         actualFamily
     }
 
+    fun joinShortCode(context: Context, personName: String, codeRaw: String): Result<String> = runCatching {
+        val code = codeRaw.filter(Char::isDigit)
+        require(code.length == 6) { "Enter the 6-digit family code" }
+        val response = call(
+            JSONObject()
+                .put("action", "join_short")
+                .put("memberName", personName.trim())
+                .put("code", code)
+        )
+        val memberId = response.getString("memberId")
+        val circleId = response.getString("circleId")
+        val familyName = response.getString("familyName")
+        val secret = response.getString("circleSecret")
+        AppPrefs.saveCloudSetup(
+            context,
+            personName.trim(),
+            familyName,
+            memberId,
+            circleId,
+            secret,
+            false
+        )
+        familyName
+    }
+
+    fun generateShortInvite(context: Context): Result<ShortInvite> = runCatching {
+        val response = call(
+            authPayload(context, "generate_short_invite")
+                .put("memberId", AppPrefs.memberId(context))
+        )
+        ShortInvite(
+            code = response.getString("code"),
+            expiresAt = parseIsoMillis(response.optString("expiresAt"))
+        )
+    }
+
     fun pull(context: Context): Result<CloudState> = runCatching {
-        val response = call(authPayload(context, "get_state"))
+        val response = call(
+            authPayload(context, "get_state")
+                .put("memberId", AppPrefs.memberId(context))
+        )
         parseState(response.getJSONObject("state"), response.optString("familyName", AppPrefs.familyName(context)))
     }
 
+    fun getSharing(context: Context): Result<List<SharingRule>> = runCatching {
+        val response = call(
+            authPayload(context, "get_sharing")
+                .put("memberId", AppPrefs.memberId(context))
+        )
+        val arr = response.optJSONArray("permissions") ?: JSONArray()
+        buildList {
+            for (i in 0 until arr.length()) {
+                val p = arr.optJSONObject(i) ?: continue
+                add(
+                    SharingRule(
+                        viewerMemberId = p.optString("viewerMemberId"),
+                        viewerName = p.optString("viewerName", "Member"),
+                        locationEnabled = p.optBoolean("locationEnabled", true),
+                        speedEnabled = p.optBoolean("speedEnabled", true),
+                        batteryEnabled = p.optBoolean("batteryEnabled", true)
+                    )
+                )
+            }
+        }
+    }
+
+    fun setSharing(
+        context: Context,
+        viewerMemberId: String,
+        locationEnabled: Boolean,
+        speedEnabled: Boolean,
+        batteryEnabled: Boolean
+    ): Result<Unit> = runCatching {
+        call(
+            authPayload(context, "set_sharing")
+                .put("memberId", AppPrefs.memberId(context))
+                .put("viewerMemberId", viewerMemberId)
+                .put("locationEnabled", locationEnabled)
+                .put("speedEnabled", speedEnabled)
+                .put("batteryEnabled", batteryEnabled)
+        )
+    }
 
     fun resolveMapShare(context: Context, sharedText: String): Result<ResolvedDestination> = runCatching {
         val response = call(
@@ -170,6 +248,7 @@ object FamilyCloud {
     fun getTripRoute(context: Context, memberId: String): Result<RoadRoute> = runCatching {
         val response = call(
             authPayload(context, "get_trip_route")
+                .put("memberId", AppPrefs.memberId(context))
                 .put("requestedMemberId", memberId)
         )
         val route = response.optJSONObject("route") ?: JSONObject()
@@ -238,6 +317,7 @@ object FamilyCloud {
     fun upsertPlace(context: Context, place: SavedPlace): Result<CloudState> = runCatching {
         val response = call(
             authPayload(context, "upsert_place")
+                .put("memberId", AppPrefs.memberId(context))
                 .put(
                     "place",
                     JSONObject()
@@ -257,7 +337,11 @@ object FamilyCloud {
     }
 
     fun deletePlace(context: Context, placeId: String): Result<CloudState> = runCatching {
-        val response = call(authPayload(context, "delete_place").put("placeId", placeId))
+        val response = call(
+            authPayload(context, "delete_place")
+                .put("memberId", AppPrefs.memberId(context))
+                .put("placeId", placeId)
+        )
         parseState(response.getJSONObject("state"), AppPrefs.familyName(context))
     }
 
@@ -303,7 +387,10 @@ object FamilyCloud {
                         tripActive = state.optBoolean("trip_active", false),
                         routeDistanceM = nullableDouble(state, "route_distance_m")?.toFloat(),
                         routeDurationS = nullableDouble(state, "route_duration_s")?.toInt(),
-                        routeUpdatedAt = parseIsoMillis(state.optString("route_updated_at"))
+                        routeUpdatedAt = parseIsoMillis(state.optString("route_updated_at")),
+                        locationVisible = state.optBoolean("location_visible", true),
+                        speedVisible = state.optBoolean("speed_visible", true),
+                        batteryVisible = state.optBoolean("battery_visible", true)
                     )
                 )
             }
@@ -345,7 +432,6 @@ object FamilyCloud {
                 )
             }
         }
-
         return CloudState(familyName, members, events, places)
     }
 
