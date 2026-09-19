@@ -16,6 +16,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.os.Build
 import android.provider.Settings
+import android.view.MotionEvent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -54,6 +55,8 @@ import com.familyconnect.app.ExternalDestinationShare
 import com.familyconnect.app.cloud.CloudMember
 import com.familyconnect.app.cloud.CloudState
 import com.familyconnect.app.cloud.FamilyCloud
+import com.familyconnect.app.cloud.SharingRule
+import com.familyconnect.app.cloud.ShortInvite
 import com.familyconnect.app.model.DeviceSnapshot
 import com.familyconnect.app.state.AppPrefs
 import com.familyconnect.app.state.RoadRoute
@@ -747,12 +750,18 @@ fun LiveFamilyMap(
             setBuiltInZoomControls(false)
             minZoomLevel = 3.0
             maxZoomLevel = 20.0
-            controller.setZoom(if (locatedMembers.isEmpty()) 11.0 else 14.0)
+            controller.setZoom(if (locatedMembers.isEmpty()) 12.5 else 16.4)
             controller.setCenter(initialCenter)
         }
     }
 
     DisposableEffect(lifecycleOwner, mapView) {
+        mapView.setOnTouchListener { _, event ->
+            if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_MOVE) {
+                followSelected = false
+            }
+            false
+        }
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> mapView.onResume()
@@ -791,7 +800,7 @@ fun LiveFamilyMap(
                 }
             }
         } else if (member.lat != null && member.lon != null) {
-            mapView.controller.setZoom(15.0)
+            mapView.controller.setZoom(16.4)
             mapView.controller.animateTo(GeoPoint(member.lat, member.lon))
         }
     }
@@ -799,7 +808,7 @@ fun LiveFamilyMap(
     LaunchedEffect(selectedId) {
         val member = members.firstOrNull { it.id == selectedId }
         if (member?.lat != null && member.lon != null) {
-            mapView.controller.setZoom(maxOf(mapView.zoomLevelDouble, 14.0))
+            if (mapView.zoomLevelDouble < 16.0) mapView.controller.setZoom(16.4)
             mapView.controller.animateTo(GeoPoint(member.lat, member.lon))
         }
     }
@@ -820,7 +829,7 @@ fun LiveFamilyMap(
                             map.overlays.add(
                                 Polyline().apply {
                                     setPoints(route.points.map { GeoPoint(it.lat, it.lon) })
-                                    outlinePaint.strokeWidth = if (member.id == selectedId) 10f else 6f
+                                    outlinePaint.strokeWidth = if (member.id == selectedId) 8f else 5f
                                     outlinePaint.color = if (member.id == selectedId) {
                                         Purple.toArgb()
                                     } else {
@@ -871,6 +880,7 @@ fun LiveFamilyMap(
                                 setOnMarkerClickListener { _, _ ->
                                     selectedId = member.id
                                     followSelected = true
+                                    if (map.zoomLevelDouble < 16.0) map.controller.setZoom(16.4)
                                     map.controller.animateTo(point)
                                     true
                                 }
@@ -916,7 +926,7 @@ fun LiveFamilyMap(
                         when {
                             locatedMembers.isEmpty() -> "Waiting for a shared family location"
                             locatedMembers.any { it.tripActive } ->
-                                locatedMembers.size.toString() + " live • active trips shown by road"
+                                locatedMembers.size.toString() + " live • trip progress updating"
                             else -> locatedMembers.size.toString() + " live family member" + if (locatedMembers.size == 1) "" else "s"
                         },
                         color = Muted,
@@ -928,7 +938,10 @@ fun LiveFamilyMap(
                     followSelected = !followSelected
                     if (followSelected) {
                         selected?.let { m ->
-                            if (m.lat != null && m.lon != null) mapView.controller.animateTo(GeoPoint(m.lat, m.lon))
+                            if (m.lat != null && m.lon != null) {
+                                mapView.controller.setZoom(16.4)
+                                mapView.controller.animateTo(GeoPoint(m.lat, m.lon))
+                            }
                         }
                     }
                 }) {
@@ -997,6 +1010,7 @@ fun LiveFamilyMap(
                             modifier = Modifier.clickable {
                                 selectedId = member.id
                                 followSelected = true
+                                if (mapView.zoomLevelDouble < 16.0) mapView.controller.setZoom(16.4)
                             },
                             color = if (active) Purple else MaterialTheme.colorScheme.surface.copy(alpha = .97f),
                             contentColor = if (active) Color.White else MaterialTheme.colorScheme.onSurface,
