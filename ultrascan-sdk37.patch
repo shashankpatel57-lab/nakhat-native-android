@@ -1,0 +1,10 @@
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -5,7 +5,7 @@
+ android {
+     namespace = "com.ultrascan.app"
+-    compileSdk = 36
++    compileSdk = 37
+ 
+     defaultConfig {
+         applicationId = "com.ultrascan.app"
