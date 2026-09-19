@@ -1769,34 +1769,239 @@ fun PrivacyProfile(
     onReset: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
+
     var shareSpeed by rememberSaveable { mutableStateOf(prefs.getBoolean("share_speed", true)) }
     var shareBattery by rememberSaveable { mutableStateOf(prefs.getBoolean("share_battery", true)) }
     var speedLimit by rememberSaveable { mutableIntStateOf(prefs.getInt("speed_limit", 80)) }
 
+    var sharingRules by remember { mutableStateOf<List<SharingRule>>(emptyList()) }
+    var sharingBusy by remember { mutableStateOf(false) }
+    var sharingError by remember { mutableStateOf<String?>(null) }
+
     val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-    val background = if (Build.VERSION.SDK_INT >= 29) ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED else true
-    val notification = if (Build.VERSION.SDK_INT >= 33) ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED else true
+    val background = if (Build.VERSION.SDK_INT >= 29) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+    } else true
+    val notification = if (Build.VERSION.SDK_INT >= 33) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    } else true
+
+    suspend fun reloadSharing() {
+        sharingBusy = true
+        val result = withContext(Dispatchers.IO) { FamilyCloud.getSharing(context) }
+        sharingBusy = false
+        result.onSuccess {
+            sharingRules = it
+            sharingError = null
+        }.onFailure {
+            sharingError = it.message ?: "Could not load sharing controls"
+        }
+    }
+
+    fun updateRule(
+        rule: SharingRule,
+        location: Boolean = rule.locationEnabled,
+        speed: Boolean = rule.speedEnabled,
+        battery: Boolean = rule.batteryEnabled
+    ) {
+        val old = sharingRules
+        sharingRules = sharingRules.map {
+            if (it.viewerMemberId == rule.viewerMemberId) {
+                it.copy(
+                    locationEnabled = location,
+                    speedEnabled = speed,
+                    batteryEnabled = battery
+                )
+            } else it
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                FamilyCloud.setSharing(
+                    context,
+                    rule.viewerMemberId,
+                    location,
+                    speed,
+                    battery
+                )
+            }
+            result.onFailure {
+                sharingRules = old
+                sharingError = it.message ?: "Could not change sharing"
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { reloadSharing() }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        item { AppHeader("Privacy & Device", AppPrefs.profileName(context) + " • " + snapshot.network) }
+        item {
+            AppHeader(
+                "Privacy & Controls",
+                AppPrefs.profileName(context) + " • " + snapshot.network
+            )
+        }
+
+        item {
+            Surface(
+                color = Color.Transparent,
+                shape = RoundedCornerShape(22.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    Modifier.background(
+                        Brush.linearGradient(listOf(Color(0xFF173E70), Color(0xFF2F6FED), Color(0xFF2BB3C0))),
+                        RoundedCornerShape(22.dp)
+                    ).padding(17.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier.size(46.dp).background(Color.White.copy(alpha = .14f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            if (trackingEnabled) Icons.Default.LocationOn else Icons.Default.LocationOff,
+                            null,
+                            tint = Color.White
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (trackingEnabled) "Location sharing ON" else "Location sharing paused",
+                            color = Color.White,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 16.sp
+                        )
+                        Text(
+                            if (trackingEnabled) "You can still hide yourself from one specific person below."
+                            else "No new location is being uploaded from this phone.",
+                            color = Color.White.copy(alpha = .78f),
+                            fontSize = 10.sp
+                        )
+                    }
+                    Switch(
+                        checked = trackingEnabled,
+                        onCheckedChange = { onToggleTracking() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Mint
+                        )
+                    )
+                }
+            }
+        }
+
+        item { SectionTitle("Who can see me", "Person-by-person control") }
+
+        sharingError?.let { message ->
+            item {
+                Surface(color = RoseSoft, shape = RoundedCornerShape(14.dp)) {
+                    Row(Modifier.padding(11.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.ErrorOutline, null, tint = Rose, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text(message, color = Color(0xFF8E2B3D), fontSize = 10.5.sp, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { scope.launch { reloadSharing() } }) {
+                            Icon(Icons.Default.Refresh, "Retry", modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+            }
+        }
+
+        if (sharingBusy && sharingRules.isEmpty()) {
+            item {
+                PremiumCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Loading family privacy controls…", color = Muted, fontSize = 11.sp)
+                    }
+                }
+            }
+        } else if (sharingRules.isEmpty()) {
+            item {
+                PremiumCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconTile(Icons.Default.GroupOff, SurfaceSoft, Muted)
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text("No other joined member yet", fontWeight = FontWeight.Bold)
+                            Text("Individual controls appear here after someone joins your family.", color = Muted, fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+        } else {
+            items(sharingRules, key = { it.viewerMemberId }) { rule ->
+                PremiumCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier.size(42.dp).background(avatarColor(rule.viewerMemberId), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                rule.viewerName.take(1).uppercase(),
+                                color = Color.White,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(rule.viewerName, fontWeight = FontWeight.Black, fontSize = 14.sp)
+                            Text(
+                                if (rule.locationEnabled) "Can see your live location" else "Your location is hidden from this person",
+                                color = if (rule.locationEnabled) Muted else Rose,
+                                fontSize = 9.8.sp
+                            )
+                        }
+                        Switch(
+                            checked = rule.locationEnabled,
+                            onCheckedChange = { updateRule(rule, location = it) }
+                        )
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(13.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Speed", fontWeight = FontWeight.Bold, fontSize = 10.5.sp, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = rule.speedEnabled,
+                            enabled = rule.locationEnabled && shareSpeed,
+                            onCheckedChange = { updateRule(rule, speed = it) },
+                            modifier = Modifier.scale(.78f)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Battery", fontWeight = FontWeight.Bold, fontSize = 10.5.sp, modifier = Modifier.weight(1f))
+                        Switch(
+                            checked = rule.batteryEnabled,
+                            enabled = shareBattery,
+                            onCheckedChange = { updateRule(rule, battery = it) },
+                            modifier = Modifier.scale(.78f)
+                        )
+                    }
+                }
+            }
+        }
+
+        item { SectionTitle("What this phone shares", "Global controls") }
+
         item {
             PremiumCard {
                 SettingRow(
-                    Icons.Default.LocationOn,
-                    "Live location",
-                    "Visible only while you choose to share",
-                    trackingEnabled
-                ) { onToggleTracking() }
-                SoftDivider()
-                SettingRow(
                     Icons.Default.Speed,
-                    "Share driving speed",
-                    "Current, average and maximum trip speed",
+                    "Driving speed",
+                    "Current, average and maximum speed",
                     shareSpeed
                 ) {
                     shareSpeed = it
@@ -1805,8 +2010,8 @@ fun PrivacyProfile(
                 SoftDivider()
                 SettingRow(
                     Icons.Default.BatteryChargingFull,
-                    "Share battery status",
-                    "Allows family to see battery during travel",
+                    "Battery status",
+                    "Battery percentage during travel",
                     shareBattery
                 ) {
                     shareBattery = it
@@ -1815,11 +2020,16 @@ fun PrivacyProfile(
             }
         }
 
-        item { SectionTitle("Speed alert threshold") }
+        item { SectionTitle("Speed alert", "Family threshold") }
         item {
             PremiumCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Family threshold", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    IconTile(Icons.Default.Speed, AmberSoft, Amber, 38)
+                    Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Notify above", fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+                        Text("Sustained speed only — GPS spikes are filtered.", color = Muted, fontSize = 9.5.sp)
+                    }
                     StatusPill(speedLimit.toString() + " km/h", PurpleSoft, Purple)
                 }
                 Slider(
@@ -1829,20 +2039,20 @@ fun PrivacyProfile(
                     valueRange = 40f..140f,
                     steps = 19
                 )
-                Text("This is a family alert threshold, not a legal speed-limit claim.", color = Muted, fontSize = 9.8.sp)
+                Text("This is your family alert threshold, not a legal road-speed claim.", color = Muted, fontSize = 9.5.sp)
             }
         }
 
         item { SectionTitle("Permission health") }
         item {
             PremiumCard {
-                HealthRow("Precise location", fine, if (fine) "Granted" else "Required for live tracking")
+                HealthRow("Precise location", fine, if (fine) "Ready" else "Required for accurate live map")
                 SoftDivider()
-                HealthRow("Background location", background, if (background) "Granted" else "Enable 'Allow all the time' for reliable place alerts")
+                HealthRow("Background location", background, if (background) "Ready" else "Needed for reliable trips and place alerts")
                 SoftDivider()
-                HealthRow("Notifications", notification, if (notification) "Granted" else "Needed for family alerts")
+                HealthRow("Notifications", notification, if (notification) "Ready" else "Enable to receive arrival and trip alerts")
                 SoftDivider()
-                HealthRow("Usage Access", snapshot.usageAccess, if (snapshot.usageAccess) "Granted" else "Optional and off")
+                HealthRow("Usage Access", snapshot.usageAccess, if (snapshot.usageAccess) "Optional access granted" else "Optional and off")
                 Spacer(Modifier.height(10.dp))
                 Button(
                     onClick = {
