@@ -35,7 +35,7 @@ data class AppSettings(
     val autoDriveUpload: Boolean = false,
     val driveTreeUri: String = "",
     val smartEmailSubject: Boolean = true,
-    val jpegQuality: Int = 92
+    val jpegQuality: Int = 97
 )
 
 object AppStore {
@@ -136,7 +136,7 @@ object AppStore {
             autoDriveUpload = p.getBoolean("autoDrive", false),
             driveTreeUri = p.getString("driveUri", "") ?: "",
             smartEmailSubject = p.getBoolean("emailSubject", true),
-            jpegQuality = p.getInt("jpegQuality", 92)
+            jpegQuality = p.getInt("jpegQuality", 97)
         )
     }
 
