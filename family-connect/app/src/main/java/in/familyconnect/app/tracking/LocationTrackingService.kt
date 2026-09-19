@@ -10,6 +10,8 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.os.BatteryManager
 import android.os.IBinder
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import com.familyconnect.app.MainActivity
@@ -80,8 +82,10 @@ class LocationTrackingService : Service() {
                 })
                 .apply()
 
+            updateAltitudeFloor(l, speed)
             updateTrip(l, previous, speed)
             checkPlaces(l, speed)
+            checkUnscheduledStop(l, speed)
             validateSpeed(speed)
             updateNotification(speed)
             syncCloudAsync(l, speed)
@@ -335,6 +339,128 @@ class LocationTrackingService : Service() {
             }
     }
 
+    private fun updateAltitudeFloor(location: Location, speedKmh: Int) {
+        val tracking = getSharedPreferences("tracking", MODE_PRIVATE)
+        if (!location.hasAltitude()) {
+            tracking.edit().remove("altitude_m").remove("floor_estimate").apply()
+            return
+        }
+
+        val verticalReliable = if (android.os.Build.VERSION.SDK_INT >= 26 && location.hasVerticalAccuracy()) {
+            location.verticalAccuracyMeters <= 6f
+        } else {
+            location.accuracy <= 20f
+        }
+
+        tracking.edit().putFloat("altitude_m", location.altitude.toFloat()).apply()
+        if (!verticalReliable) {
+            tracking.edit().remove("floor_estimate").apply()
+            return
+        }
+
+        val myMemberId = AppPrefs.memberId(this)
+        val place = AppPrefs.places(this)
+            .filter { it.watchMemberId == null || it.watchMemberId == myMemberId }
+            .firstOrNull {
+                distance(location.latitude, location.longitude, it.lat, it.lon) <= it.radiusM + 60f
+            }
+
+        if (place == null) {
+            tracking.edit().remove("floor_estimate").apply()
+            return
+        }
+
+        val baseKey = "floor_base_alt_" + place.id
+        if (!tracking.contains(baseKey) && speedKmh <= 2) {
+            tracking.edit().putFloat(baseKey, location.altitude.toFloat()).apply()
+        }
+
+        val base = tracking.getFloat(baseKey, Float.NaN)
+        if (base.isNaN()) {
+            tracking.edit().remove("floor_estimate").apply()
+            return
+        }
+
+        val delta = location.altitude.toFloat() - base
+        if (kotlin.math.abs(delta) > 120f) {
+            tracking.edit().remove("floor_estimate").apply()
+            return
+        }
+
+        val floor = (delta / 3.1f).roundToInt().coerceIn(-3, 50)
+        tracking.edit().putInt("floor_estimate", floor).apply()
+    }
+
+    private fun checkUnscheduledStop(location: Location, speedKmh: Int) {
+        val settings = getSharedPreferences("settings", MODE_PRIVATE)
+        if (!settings.getBoolean("unsaved_stop_alerts", false)) return
+
+        val myMemberId = AppPrefs.memberId(this)
+        val nearSavedPlace = AppPrefs.places(this)
+            .filter { it.watchMemberId == null || it.watchMemberId == myMemberId }
+            .any {
+                distance(location.latitude, location.longitude, it.lat, it.lon) <= it.radiusM + 120f
+            }
+
+        val tracking = getSharedPreferences("tracking", MODE_PRIVATE)
+        if (nearSavedPlace) {
+            tracking.edit()
+                .remove("stop_started_at")
+                .remove("stop_anchor_lat")
+                .remove("stop_anchor_lon")
+                .putBoolean("stop_notified", false)
+                .apply()
+            return
+        }
+
+        val hasAnchor = tracking.contains("stop_anchor_lat") && tracking.contains("stop_anchor_lon")
+        val anchorLat = if (hasAnchor) java.lang.Double.longBitsToDouble(tracking.getLong("stop_anchor_lat", 0L)) else location.latitude
+        val anchorLon = if (hasAnchor) java.lang.Double.longBitsToDouble(tracking.getLong("stop_anchor_lon", 0L)) else location.longitude
+        val moved = if (hasAnchor) distance(location.latitude, location.longitude, anchorLat, anchorLon) else 0f
+
+        if (speedKmh > 3 || moved > 120f) {
+            tracking.edit()
+                .putLong("stop_started_at", System.currentTimeMillis())
+                .putLong("stop_anchor_lat", java.lang.Double.doubleToRawLongBits(location.latitude))
+                .putLong("stop_anchor_lon", java.lang.Double.doubleToRawLongBits(location.longitude))
+                .putBoolean("stop_notified", false)
+                .apply()
+            return
+        }
+
+        if (!hasAnchor) {
+            tracking.edit()
+                .putLong("stop_started_at", System.currentTimeMillis())
+                .putLong("stop_anchor_lat", java.lang.Double.doubleToRawLongBits(location.latitude))
+                .putLong("stop_anchor_lon", java.lang.Double.doubleToRawLongBits(location.longitude))
+                .putBoolean("stop_notified", false)
+                .apply()
+            return
+        }
+
+        val started = tracking.getLong("stop_started_at", System.currentTimeMillis())
+        val thresholdMin = settings.getInt("unsaved_stop_minutes", 10).coerceIn(5, 30)
+        val elapsed = System.currentTimeMillis() - started
+        if (elapsed >= thresholdMin * 60_000L && !tracking.getBoolean("stop_notified", false)) {
+            tracking.edit().putBoolean("stop_notified", true).apply()
+            Thread {
+                val place = FamilyCloud.reverseGeocode(this, location.latitude, location.longitude).getOrNull()
+                if (place != null) {
+                    val title = AppPrefs.profileName(this) + " stopped near " + place.name
+                    val body = "Stationary for about " + thresholdMin + " minutes • " + place.detail
+                    FamilyCloud.publishEvent(this, "UNSAVED_STOP", title, body)
+                    showAlert(
+                        7900 + ((location.latitude * 10000).toInt() and 0x3FF),
+                        title,
+                        body
+                    )
+                } else {
+                    tracking.edit().putBoolean("stop_notified", false).apply()
+                }
+            }.start()
+        }
+    }
+
     private fun validateSpeed(speed: Int) {
         val threshold = getSharedPreferences("settings", MODE_PRIVATE).getInt("speed_limit", 80)
         if (speed > threshold) {
@@ -386,11 +512,11 @@ class LocationTrackingService : Service() {
     }
 
     private fun notifyEvent(id: Int, type: String, title: String, body: String) {
-        showAlert(id, title, body)
+        showAlert(id, title, body, emergency = type == "SOS")
         Thread { FamilyCloud.publishEvent(this, type, title, body) }.start()
     }
 
-    private fun showAlert(id: Int, title: String, body: String) {
+    private fun showAlert(id: Int, title: String, body: String, emergency: Boolean = false) {
         val openApp = PendingIntent.getActivity(
             this,
             id,
@@ -402,7 +528,7 @@ class LocationTrackingService : Service() {
         )
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(
             id,
-            NotificationCompat.Builder(this, "family_alerts")
+            NotificationCompat.Builder(this, if (emergency) "emergency_alerts" else "family_alerts")
                 .setSmallIcon(R.drawable.ic_launcher)
                 .setContentTitle(title)
                 .setContentText(body)
@@ -450,7 +576,8 @@ class LocationTrackingService : Service() {
                         showAlert(
                             8200 + (event.id.hashCode() and 0x3FF),
                             event.title,
-                            event.memberName + " • " + event.body
+                            event.memberName + " • " + event.body,
+                            emergency = event.type == "SOS"
                         )
                         if (event.createdAt > newest) newest = event.createdAt
                     }
@@ -469,6 +596,23 @@ class LocationTrackingService : Service() {
         nm.createNotificationChannel(
             NotificationChannel("family_alerts", "Family alerts", NotificationManager.IMPORTANCE_HIGH)
         )
+        val emergency = NotificationChannel(
+            "emergency_alerts",
+            "Emergency SOS",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Urgent family SOS alerts"
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 500, 250, 500, 250, 900)
+            setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+        }
+        nm.createNotificationChannel(emergency)
     }
 
     override fun onDestroy() {
