@@ -4,7 +4,7 @@ plugins {
 }
 android {
     namespace = "app.lumascan.ultra"
-    compileSdk = 36
+    compileSdk = 37
     defaultConfig {
         applicationId = "app.lumascan.ultra"
         minSdk = 23
