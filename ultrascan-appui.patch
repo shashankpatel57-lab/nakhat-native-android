@@ -1,0 +1,47 @@
+--- a/app/src/main/java/com/ultrascan/app/AppUi.kt
++++ b/app/src/main/java/com/ultrascan/app/AppUi.kt
+@@ -1,3 +1,5 @@
++@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
++
+ package com.ultrascan.app
+ 
+ import android.graphics.BitmapFactory
+@@ -741,32 +743,32 @@
+                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                     item {
+                         ExportAction(Icons.Rounded.PictureAsPdf, "PDF") {
+-                            scope.launchExport { controller.exportManager.exportPdf(document) } { controller.exportManager.share(it, "Share PDF") }
++                            scope.launchExport(producer = { controller.exportManager.exportPdf(document) }, consumer = { controller.exportManager.share(it, "Share PDF") })
+                         }
+                     }
+                     item {
+                         ExportAction(Icons.Rounded.Email, "Email") {
+-                            scope.launchExport { controller.exportManager.exportPdf(document) } { controller.exportManager.share(it, "Email scan", document.title) }
++                            scope.launchExport(producer = { controller.exportManager.exportPdf(document) }, consumer = { controller.exportManager.share(it, "Email scan", document.title) })
+                         }
+                     }
+                     item {
+                         ExportAction(Icons.Rounded.Archive, "JPG ZIP") {
+-                            scope.launchExport { controller.exportManager.exportJpegZip(document) } { controller.exportManager.share(it, "Share JPG archive") }
++                            scope.launchExport(producer = { controller.exportManager.exportJpegZip(document) }, consumer = { controller.exportManager.share(it, "Share JPG archive") })
+                         }
+                     }
+                     item {
+                         ExportAction(Icons.Rounded.TextSnippet, "TXT") {
+-                            scope.launchExport { controller.exportManager.exportText(document) } { controller.exportManager.share(it, "Share OCR text") }
++                            scope.launchExport(producer = { controller.exportManager.exportText(document) }, consumer = { controller.exportManager.share(it, "Share OCR text") })
+                         }
+                     }
+                     item {
+                         ExportAction(Icons.Rounded.TableChart, "CSV") {
+-                            scope.launchExport { controller.exportManager.exportCsv(document) } { controller.exportManager.share(it, "Share extracted table") }
++                            scope.launchExport(producer = { controller.exportManager.exportCsv(document) }, consumer = { controller.exportManager.share(it, "Share extracted table") })
+                         }
+                     }
+                     item {
+                         ExportAction(Icons.Rounded.Article, "Word") {
+-                            scope.launchExport { controller.exportManager.exportDocx(document) } { controller.exportManager.share(it, "Share Word document") }
++                            scope.launchExport(producer = { controller.exportManager.exportDocx(document) }, consumer = { controller.exportManager.share(it, "Share Word document") })
+                         }
+                     }
+                 }
