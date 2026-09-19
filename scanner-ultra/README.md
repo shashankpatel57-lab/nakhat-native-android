@@ -37,3 +37,5 @@ gradle :app:assembleDebug
 Output: `app/build/outputs/apk/debug/app-debug.apk`
 
 CI validation is enabled for the scanner branch.
+
+Build validation revision: 2.
