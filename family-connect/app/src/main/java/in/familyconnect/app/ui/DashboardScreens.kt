@@ -876,7 +876,7 @@ fun LiveFamilyMap(
                         map.overlays.add(
                             Marker(map).apply {
                                 position = point
-                                icon = memberMarkerDrawable(context, member)
+                                icon = memberMarkerDrawable(context, member, member.id == selectedId)
                                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                                 title = member.name
                                 snippet = member.speed.toString() + " km/h • " + member.motion
@@ -1185,55 +1185,75 @@ private fun destinationMarkerDrawable(context: Context, member: CloudMember): Bi
     return BitmapDrawable(context.resources, bitmap)
 }
 
-private fun memberMarkerDrawable(context: Context, member: CloudMember): BitmapDrawable {
-    val w = 260
-    val h = 92
+private fun memberMarkerDrawable(
+    context: Context,
+    member: CloudMember,
+    selected: Boolean
+): BitmapDrawable {
+    val w = 214
+    val h = 78
     val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
-    val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xF7FFFFFF.toInt() }
+
+    val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x22000000 }
+    canvas.drawRoundRect(RectF(6f, 8f, (w - 4).toFloat(), 65f), 25f, 25f, shadow)
+
+    val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFAFFFFFF.toInt() }
     val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0x22000000
+        color = if (selected) Purple.toArgb() else 0x22000000
         style = Paint.Style.STROKE
-        strokeWidth = 2f
+        strokeWidth = if (selected) 4f else 2f
     }
-    val rect = RectF(4f, 4f, (w - 4).toFloat(), 76f)
-    canvas.drawRoundRect(rect, 26f, 26f, bg)
-    canvas.drawRoundRect(rect, 26f, 26f, border)
+    val rect = RectF(4f, 4f, (w - 6).toFloat(), 61f)
+    canvas.drawRoundRect(rect, 24f, 24f, bg)
+    canvas.drawRoundRect(rect, 24f, 24f, border)
 
     val avatar = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = avatarColor(member.id).toArgb() }
-    canvas.drawCircle(39f, 40f, 25f, avatar)
+    canvas.drawCircle(34f, 32f, 22f, avatar)
 
     val initial = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
-        textSize = 24f
+        textSize = 21f
         typeface = Typeface.DEFAULT_BOLD
         textAlign = Paint.Align.CENTER
     }
-    canvas.drawText(member.name.take(1).uppercase(), 39f, 48f, initial)
+    canvas.drawText(member.name.take(1).uppercase(), 34f, 39f, initial)
 
     val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF171829.toInt()
-        textSize = 22f
-        typeface = Typeface.DEFAULT_BOLD
-    }
-    val speedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Purple.toArgb()
+        color = 0xFF122033.toInt()
         textSize = 18f
         typeface = Typeface.DEFAULT_BOLD
     }
-    canvas.drawText(member.name.take(14), 75f, 34f, namePaint)
-    canvas.drawText(member.speed.toString() + " km/h • " + member.motion.take(12), 75f, 59f, speedPaint)
+    val infoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = if (member.speed > 0) Purple.toArgb() else 0xFF68768A.toInt()
+        textSize = 14f
+        typeface = Typeface.DEFAULT_BOLD
+    }
+    canvas.drawText(member.name.take(13), 66f, 28f, namePaint)
+    val info = if (member.locationVisible) {
+        member.speed.toString() + " km/h • " + member.motion.take(10)
+    } else {
+        "Location private"
+    }
+    canvas.drawText(info.take(20), 66f, 48f, infoPaint)
 
-    val pin = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xF7FFFFFF.toInt() }
+    val pin = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFAFFFFFF.toInt() }
     val path = android.graphics.Path().apply {
-        moveTo(112f, 75f)
-        lineTo(130f, 91f)
-        lineTo(148f, 75f)
+        moveTo(92f, 60f)
+        lineTo(106f, 77f)
+        lineTo(120f, 60f)
         close()
     }
     canvas.drawPath(path, pin)
+
+    if (selected) {
+        val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Purple.toArgb() }
+        canvas.drawCircle(197f, 19f, 6f, dot)
+    }
+
     return BitmapDrawable(context.resources, bitmap)
 }
+
 
 @Composable
 fun FamilyAndPlacesScreen(
