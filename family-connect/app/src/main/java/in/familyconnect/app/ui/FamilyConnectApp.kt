@@ -26,7 +26,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -72,158 +73,208 @@ private fun SetupScreen(onReady: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
 
     Box(
-        Modifier.fillMaxSize().background(
-            Brush.verticalGradient(
-                listOf(Color(0xFFF7F7FF), Color(0xFFF4F7FB), Color.White)
+        Modifier.fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFFEAF3FF), Color(0xFFF5FAFC), Color.White)
+                )
             )
-        ).windowInsetsPadding(WindowInsets.safeDrawing)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
     ) {
         Column(
-            Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 20.dp),
+            Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 22.dp),
             verticalArrangement = Arrangement.Center
         ) {
-            Box(
-                Modifier.size(68.dp).background(
-                    Brush.linearGradient(listOf(Color(0xFF5D55E4), Color(0xFF8E86FF))),
-                    RoundedCornerShape(22.dp)
-                ),
-                contentAlignment = Alignment.Center
+            Surface(
+                shape = RoundedCornerShape(26.dp),
+                color = Color.White.copy(alpha = .88f),
+                shadowElevation = 10.dp
             ) {
-                Icon(Icons.Default.Shield, null, tint = Color.White, modifier = Modifier.size(34.dp))
-            }
-            Spacer(Modifier.height(18.dp))
-            Text("Family Connect", fontSize = 30.sp, fontWeight = FontWeight.Black, color = Ink)
-            Text(
-                "Create your own private family circle. Nothing is preloaded — only people who actually join appear.",
-                color = Muted, fontSize = 13.sp, lineHeight = 18.sp
-            )
-            Spacer(Modifier.height(26.dp))
+                Column(Modifier.padding(22.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier.size(58.dp).background(
+                                Brush.linearGradient(listOf(Color(0xFF2F6FED), Color(0xFF2BB3C0))),
+                                RoundedCornerShape(18.dp)
+                            ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Shield, null, tint = Color.White, modifier = Modifier.size(30.dp))
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Column {
+                            Text("Family Connect", fontSize = 25.sp, fontWeight = FontWeight.Black, color = Ink)
+                            Text("Private family coordination", color = Muted, fontSize = 11.5.sp)
+                        }
+                    }
 
-            when (mode) {
-                "welcome" -> {
-                    Button(
-                        onClick = { mode = "create"; error = null },
-                        modifier = Modifier.fillMaxWidth().height(54.dp),
-                        shape = RoundedCornerShape(17.dp)
-                    ) {
-                        Icon(Icons.Default.Groups, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Create a Family", fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedButton(
-                        onClick = { mode = "join"; error = null },
-                        modifier = Modifier.fillMaxWidth().height(54.dp),
-                        shape = RoundedCornerShape(17.dp)
-                    ) {
-                        Text("Join with Invitation Code", fontWeight = FontWeight.Bold)
-                    }
-                }
-                "create" -> {
-                    Text("Create your family", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("Your name") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp)
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = family,
-                        onValueChange = { family = it },
-                        label = { Text("Family name") },
-                        placeholder = { Text("e.g. My Family") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp)
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    Button(
-                        enabled = !busy && name.trim().length >= 2 && family.trim().length >= 2,
-                        onClick = {
-                            busy = true; error = null
-                            scope.launch {
-                                val result = withContext(Dispatchers.IO) {
-                                    FamilyCloud.createFamily(context, name.trim(), family.trim())
-                                }
-                                busy = false
-                                result.onSuccess { onReady() }
-                                    .onFailure { error = it.message ?: "Could not create family" }
+                    Spacer(Modifier.height(22.dp))
+
+                    when (mode) {
+                        "welcome" -> {
+                            Text(
+                                "Stay connected without repeated calls.",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 18.sp,
+                                color = Ink
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "Create a private family or join one with a simple 6-digit code. Only real joined members appear.",
+                                color = Muted,
+                                fontSize = 12.sp,
+                                lineHeight = 17.sp
+                            )
+                            Spacer(Modifier.height(20.dp))
+                            Button(
+                                onClick = { mode = "create"; error = null },
+                                modifier = Modifier.fillMaxWidth().height(54.dp),
+                                shape = RoundedCornerShape(16.dp)
+                            ) {
+                                Icon(Icons.Default.Groups, null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Create a Family", fontWeight = FontWeight.Bold)
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Text("Create & Continue", fontWeight = FontWeight.Bold)
-                    }
-                    TextButton(onClick = { mode = "welcome" }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                        Text("Back")
-                    }
-                }
-                else -> {
-                    Text("Join a family", fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("Your name") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp)
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = code,
-                        onValueChange = { code = it },
-                        label = { Text("Invitation code") },
-                        placeholder = { Text("Paste FC2-... code") },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 3,
-                        maxLines = 5,
-                        shape = RoundedCornerShape(16.dp)
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    Button(
-                        enabled = !busy && name.trim().length >= 2 && code.trim().startsWith("FC2-"),
-                        onClick = {
-                            busy = true; error = null
-                            scope.launch {
-                                val result = withContext(Dispatchers.IO) {
-                                    FamilyCloud.joinFamily(context, name.trim(), code.trim())
-                                }
-                                busy = false
-                                result.onSuccess { onReady() }
-                                    .onFailure { error = it.message ?: "Could not join family" }
+                            Spacer(Modifier.height(10.dp))
+                            FilledTonalButton(
+                                onClick = { mode = "join"; error = null },
+                                modifier = Modifier.fillMaxWidth().height(54.dp),
+                                shape = RoundedCornerShape(16.dp)
+                            ) {
+                                Text("Join with 6-digit Code", fontWeight = FontWeight.Bold)
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth().height(52.dp),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Text("Join Family", fontWeight = FontWeight.Bold)
+                        }
+
+                        "create" -> {
+                            Text("Create your family", fontWeight = FontWeight.Black, fontSize = 18.sp)
+                            Text("You can invite members after setup.", color = Muted, fontSize = 10.5.sp)
+                            Spacer(Modifier.height(14.dp))
+                            OutlinedTextField(
+                                value = name,
+                                onValueChange = { name = it.take(60) },
+                                label = { Text("Your name") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                shape = RoundedCornerShape(15.dp)
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                value = family,
+                                onValueChange = { family = it.take(80) },
+                                label = { Text("Family name") },
+                                placeholder = { Text("e.g. Patel Family") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                shape = RoundedCornerShape(15.dp)
+                            )
+                            Spacer(Modifier.height(14.dp))
+                            Button(
+                                enabled = !busy && name.trim().length >= 2 && family.trim().length >= 2,
+                                onClick = {
+                                    busy = true
+                                    error = null
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            FamilyCloud.createFamily(context, name.trim(), family.trim())
+                                        }
+                                        busy = false
+                                        result.onSuccess { onReady() }
+                                            .onFailure { error = it.message ?: "Could not create family" }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
+                                shape = RoundedCornerShape(15.dp)
+                            ) {
+                                if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                else Text("Create & Continue", fontWeight = FontWeight.Bold)
+                            }
+                            TextButton(
+                                onClick = { mode = "welcome" },
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            ) { Text("Back") }
+                        }
+
+                        else -> {
+                            Text("Join a family", fontWeight = FontWeight.Black, fontSize = 18.sp)
+                            Text("Ask a family member for the current 6-digit invite code.", color = Muted, fontSize = 10.5.sp)
+                            Spacer(Modifier.height(14.dp))
+                            OutlinedTextField(
+                                value = name,
+                                onValueChange = { name = it.take(60) },
+                                label = { Text("Your name") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                shape = RoundedCornerShape(15.dp)
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                value = code,
+                                onValueChange = { code = it.filter(Char::isDigit).take(6) },
+                                label = { Text("6-digit family code") },
+                                placeholder = { Text("123456") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                textStyle = LocalTextStyle.current.copy(
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = 5.sp
+                                ),
+                                shape = RoundedCornerShape(15.dp)
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "Codes expire after 10 minutes and can be used once.",
+                                color = Muted,
+                                fontSize = 9.8.sp
+                            )
+                            Spacer(Modifier.height(14.dp))
+                            Button(
+                                enabled = !busy && name.trim().length >= 2 && code.length == 6,
+                                onClick = {
+                                    busy = true
+                                    error = null
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            FamilyCloud.joinShortCode(context, name.trim(), code)
+                                        }
+                                        busy = false
+                                        result.onSuccess { onReady() }
+                                            .onFailure { error = it.message ?: "Could not join family" }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
+                                shape = RoundedCornerShape(15.dp)
+                            ) {
+                                if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                else Text("Join Family", fontWeight = FontWeight.Bold)
+                            }
+                            TextButton(
+                                onClick = { mode = "welcome" },
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            ) { Text("Back") }
+                        }
                     }
-                    TextButton(onClick = { mode = "welcome" }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                        Text("Back")
+
+                    error?.let {
+                        Spacer(Modifier.height(10.dp))
+                        Surface(color = RoseSoft, shape = RoundedCornerShape(13.dp)) {
+                            Text(it, Modifier.padding(11.dp), color = Color(0xFF9D2639), fontSize = 11.sp)
+                        }
                     }
                 }
             }
 
-            error?.let {
-                Spacer(Modifier.height(10.dp))
-                Surface(color = RoseSoft, shape = RoundedCornerShape(14.dp)) {
-                    Text(it, Modifier.padding(12.dp), color = Color(0xFF9D2639), fontSize = 11.5.sp)
-                }
+            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Shield, null, tint = Mint, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    "You control who can see your location, speed and battery.",
+                    color = Muted,
+                    fontSize = 10.3.sp
+                )
             }
-
-            Spacer(Modifier.height(18.dp))
-            Text(
-                "Location, speed and app activity remain permission-controlled. Joining a family does not silently enable them.",
-                color = Muted, fontSize = 10.5.sp, lineHeight = 14.sp
-            )
         }
     }
 }
