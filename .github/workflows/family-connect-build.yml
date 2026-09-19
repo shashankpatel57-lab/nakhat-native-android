@@ -3,7 +3,7 @@ name: Family Connect Android Build
 on:
   push:
     branches:
-      - build/family-connect-v5-stable-live
+      - build/family-connect-v6-ui-control
     paths:
       - 'family-connect/**'
       - '.github/workflows/family-connect-build.yml'
@@ -39,12 +39,12 @@ jobs:
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Prepare APK
-        run: cp family-connect/app/build/outputs/apk/debug/app-debug.apk FamilyConnect-v5-stable-live.apk
+        run: cp family-connect/app/build/outputs/apk/debug/app-debug.apk FamilyConnect-v6-ui-control.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FamilyConnect-v5-stable-live
-          path: FamilyConnect-v5-stable-live.apk
+          name: FamilyConnect-v6-ui-control
+          path: FamilyConnect-v6-ui-control.apk
           if-no-files-found: error
           retention-days: 7
