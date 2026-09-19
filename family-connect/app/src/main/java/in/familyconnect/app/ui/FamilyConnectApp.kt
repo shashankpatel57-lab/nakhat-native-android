@@ -413,33 +413,58 @@ private fun FamilyShell(onReset: () -> Unit) {
 
 @Composable
 private fun PremiumBottomBar(selected: AppScreen, onSelect: (AppScreen) -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
-        NavigationBar(
-            modifier = Modifier.navigationBarsPadding().height(72.dp),
-            containerColor = MaterialTheme.colorScheme.surface,
-            tonalElevation = 0.dp
+    Box(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .navigationBarsPadding()
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 10.dp,
+            tonalElevation = 1.dp
         ) {
-            val items = listOf(
-                Triple(AppScreen.Home, Icons.Default.Home, "Home"),
-                Triple(AppScreen.Map, Icons.Default.Map, "Map"),
-                Triple(AppScreen.Family, Icons.Default.Groups, "Family"),
-                Triple(AppScreen.Safety, Icons.Default.Security, "Safety"),
-                Triple(AppScreen.Profile, Icons.Default.Person, "Profile")
-            )
-            items.forEach { item ->
-                NavigationBarItem(
-                    selected = selected == item.first,
-                    onClick = { onSelect(item.first) },
-                    icon = { Icon(item.second, item.third, modifier = Modifier.size(21.dp)) },
-                    label = { Text(item.third, fontSize = 9.5.sp, fontWeight = if (selected == item.first) FontWeight.Bold else FontWeight.Medium) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Purple,
-                        selectedTextColor = Purple,
-                        indicatorColor = PurpleSoft,
-                        unselectedIconColor = Muted,
-                        unselectedTextColor = Muted
-                    )
+            NavigationBar(
+                modifier = Modifier.height(66.dp),
+                containerColor = Color.Transparent,
+                tonalElevation = 0.dp
+            ) {
+                val items = listOf(
+                    Triple(AppScreen.Home, Icons.Default.Home, "Home"),
+                    Triple(AppScreen.Map, Icons.Default.Map, "Map"),
+                    Triple(AppScreen.Family, Icons.Default.Groups, "Family"),
+                    Triple(AppScreen.Safety, Icons.Default.Security, "Safety"),
+                    Triple(AppScreen.Profile, Icons.Default.Person, "You")
                 )
+                items.forEach { item ->
+                    NavigationBarItem(
+                        selected = selected == item.first,
+                        onClick = { onSelect(item.first) },
+                        icon = {
+                            Icon(
+                                item.second,
+                                item.third,
+                                modifier = Modifier.size(if (selected == item.first) 23.dp else 20.dp)
+                            )
+                        },
+                        label = {
+                            Text(
+                                item.third,
+                                fontSize = 9.sp,
+                                fontWeight = if (selected == item.first) FontWeight.Black else FontWeight.Medium
+                            )
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = Purple,
+                            selectedTextColor = Purple,
+                            indicatorColor = PurpleSoft,
+                            unselectedIconColor = Muted,
+                            unselectedTextColor = Muted
+                        )
+                    )
+                }
             }
         }
     }
