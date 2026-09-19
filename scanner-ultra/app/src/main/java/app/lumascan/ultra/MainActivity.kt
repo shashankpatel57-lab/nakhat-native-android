@@ -36,6 +36,7 @@ class MainActivity : ComponentActivity() {
 
     private var sessionFormat = OutputFormat.PDF
     private var sessionColor = ColorMode.COLOR
+    private var sessionBatch = false
     private val io = Executors.newSingleThreadExecutor()
 
     private val scannerLauncher = registerForActivityResult(
@@ -91,7 +92,11 @@ class MainActivity : ComponentActivity() {
                         settings = it
                         AppStore.saveSettings(this, it)
                     },
-                    onConnectDrive = { drivePicker.launch(null) }
+                    onConnectDrive = {
+                        toast("In the folder picker, open the side menu, choose Google Drive, then select a folder.")
+                        drivePicker.launch(null)
+                    },
+                    onOpenDrive = ::openGoogleDrive
                 )
             }
         }
@@ -100,6 +105,7 @@ class MainActivity : ComponentActivity() {
     private fun launchScanner(batch: Boolean, format: OutputFormat, color: ColorMode) {
         sessionFormat = format
         sessionColor = color
+        sessionBatch = batch
         val options = GmsDocumentScannerOptions.Builder()
             .setGalleryImportAllowed(true)
             .setPageLimit(if (batch) 50 else 1)
@@ -128,6 +134,7 @@ class MainActivity : ComponentActivity() {
         processing = true
         val capturedFormat = sessionFormat
         val capturedColor = sessionColor
+        val capturedBatch = sessionBatch
         val settingsSnapshot = settings
         val id = UUID.randomUUID().toString()
         val created = System.currentTimeMillis()
@@ -135,7 +142,7 @@ class MainActivity : ComponentActivity() {
         io.execute {
             try {
                 val dir = File(filesDir, "scans/" + id).apply { mkdirs() }
-                val imageFiles = pages.mapIndexed { index, page ->
+                val processed = pages.mapIndexed { index, page ->
                     File(dir, "page_" + (index + 1).toString().padStart(3, '0') + ".jpg").also { target ->
                         ScanProcessing.processPage(
                             context = this,
@@ -148,6 +155,25 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+
+                val scored = processed.map { it to ScanProcessing.sharpnessScore(it) }
+                val minimumSharpness = 18.0
+                val imageFiles = if (capturedBatch && scored.size > 1) {
+                    scored.filter { it.second >= minimumSharpness }.map { it.first }
+                } else {
+                    scored.map { it.first }
+                }
+                val skippedFrames = processed.size - imageFiles.size
+
+                if (!capturedBatch && scored.firstOrNull()?.second?.let { it < minimumSharpness } == true) {
+                    dir.deleteRecursively()
+                    error("The page looks blurry. Hold the phone steady, let focus settle, and retake it.")
+                }
+                if (imageFiles.isEmpty()) {
+                    dir.deleteRecursively()
+                    error("All captured pages were too blurry. Please rescan with the phone steady.")
+                }
+                processed.filterNot { imageFiles.contains(it) }.forEach { it.delete() }
 
                 val fallbackTitle = SimpleDateFormat("'Scan'_yyyy-MM-dd_HH-mm", Locale.US).format(Date(created))
                 val pdf = File(dir, fallbackTitle + ".pdf")
@@ -169,6 +195,10 @@ class MainActivity : ComponentActivity() {
                     docs = listOf(doc) + docs
                     AppStore.saveDocs(this, docs)
                     processing = false
+                    if (skippedFrames > 0) {
+                        toast(skippedFrames.toString() + " motion-blurred page-turn frame" +
+                            if (skippedFrames == 1) " was skipped" else "s were skipped")
+                    }
                     if (settingsSnapshot.ocrEnabled) runOcr(doc, settingsSnapshot)
                     else finalizeDocument(doc, "", settingsSnapshot)
                 }
@@ -279,16 +309,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun deleteDocument(doc: ScanDoc) {
-        val pdf = File(doc.pdfPath)
-        val parent = pdf.parentFile
-        if (parent?.name == doc.id) {
-            parent.deleteRecursively()
-        } else {
-            pdf.delete()
-            doc.imagePaths.forEach { File(it).delete() }
+        try {
+            File(doc.pdfPath).delete()
+            doc.imagePaths.forEach { path -> runCatching { File(path).delete() } }
+            val scanRoot = File(filesDir, "scans").canonicalFile
+            val parent = File(doc.pdfPath).parentFile?.canonicalFile
+            if (parent != null && parent.path.startsWith(scanRoot.path) && parent != scanRoot) {
+                parent.deleteRecursively()
+            }
+        } catch (_: Exception) {
         }
         docs = docs.filterNot { it.id == doc.id }
         AppStore.saveDocs(this, docs)
+        toast("Scan deleted")
     }
 
     private fun organizeDocument(doc: ScanDoc, folderId: String, selectedTags: List<String>) {
@@ -369,6 +402,19 @@ class MainActivity : ComponentActivity() {
         true
         } catch (_: Exception) {
             false
+        }
+    }
+
+    private fun openGoogleDrive() {
+        val launch = packageManager.getLaunchIntentForPackage("com.google.android.apps.docs")
+        if (launch != null) {
+            startActivity(launch)
+        } else {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://drive.google.com")))
+            } catch (_: Exception) {
+                toast("Google Drive is not available on this device")
+            }
         }
     }
 
