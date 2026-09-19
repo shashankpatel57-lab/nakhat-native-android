@@ -12,9 +12,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout build branch
         uses: actions/checkout@v4
@@ -22,6 +19,7 @@ jobs:
       - name: Restore UltraScan source bundle
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p scanner-app
           cat ultrascan-src.part* > ultrascan-src.tar.gz.b64
           base64 -d ultrascan-src.tar.gz.b64 > ultrascan-src.tar.gz
@@ -33,21 +31,44 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Configure preinstalled Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/lib/android/sdk/platform-tools" >> "$GITHUB_PATH"
+          test -x /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+
+      - name: Install Android API 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
       - name: Set up Gradle 9.6
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.6.0'
 
-      - name: Install Android SDK 36
-        shell: bash
-        run: |
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
-
       - name: Build debug APK
         working-directory: scanner-app
-        run: gradle :app:assembleDebug --stacktrace --no-daemon
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle :app:assembleDebug --stacktrace --no-daemon 2>&1 | tee android-build.log
+
+      - name: Publish build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: UltraScan-build-diagnostics
+          path: scanner-app/android-build.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Publish APK artifact
         uses: actions/upload-artifact@v4
@@ -55,3 +76,4 @@ jobs:
           name: UltraScan-debug-apk
           path: scanner-app/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 30
