@@ -1,12 +1,10 @@
 package com.familyconnect.app.ui
 
 import android.Manifest
-import android.app.NotificationManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -14,9 +12,9 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
-import android.view.MotionEvent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -30,6 +28,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -37,28 +36,32 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.familyconnect.app.ExternalDestinationShare
+import com.familyconnect.app.MainActivity
+import com.familyconnect.app.cloud.CloudEvent
 import com.familyconnect.app.cloud.CloudMember
 import com.familyconnect.app.cloud.CloudState
 import com.familyconnect.app.cloud.FamilyCloud
 import com.familyconnect.app.cloud.SharingRule
 import com.familyconnect.app.cloud.ShortInvite
 import com.familyconnect.app.model.DeviceSnapshot
+import com.familyconnect.app.safety.EmergencyAudio
 import com.familyconnect.app.state.AppPrefs
 import com.familyconnect.app.state.RoadRoute
 import com.familyconnect.app.state.SavedPlace
@@ -68,12 +71,103 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import java.util.UUID
+import kotlin.math.roundToInt
+
+private val V7Blue = Color(0xFF2563EB)
+private val V7Cyan = Color(0xFF0891B2)
+private val V7Green = Color(0xFF059669)
+private val V7Red = Color(0xFFE11D48)
+private val V7Ink = Color(0xFF0F172A)
+private val V7Muted = Color(0xFF64748B)
+private val V7Canvas = Color(0xFFF5F7FB)
+private val V7BlueSoft = Color(0xFFEFF6FF)
+private val V7GreenSoft = Color(0xFFECFDF5)
+private val V7RedSoft = Color(0xFFFFF1F2)
+private val V7AmberSoft = Color(0xFFFFFBEB)
+
+@Composable
+private fun V7TopBar(title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Surface(shape = RoundedCornerShape(16.dp), color = V7BlueSoft) {
+            Icon(icon, null, tint = V7Blue, modifier = Modifier.padding(11.dp).size(23.dp))
+        }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.Black, fontSize = 21.sp, color = MaterialTheme.colorScheme.onBackground)
+            Text(subtitle, color = V7Muted, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun V7Card(
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val click = if (onClick != null) modifier.clickable(onClick = onClick) else modifier
+    Surface(
+        modifier = click,
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(22.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .5f)),
+        shadowElevation = 1.dp
+    ) {
+        Column(Modifier.padding(15.dp), content = content)
+    }
+}
+
+@Composable
+private fun V7Section(title: String, action: String? = null, onAction: (() -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, fontWeight = FontWeight.Black, fontSize = 16.sp, modifier = Modifier.weight(1f))
+        if (action != null && onAction != null) {
+            TextButton(onClick = onAction) {
+                Text(action, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun Metric(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, fontWeight = FontWeight.Black, fontSize = 14.sp)
+        Text(label, color = V7Muted, fontSize = 8.8.sp)
+    }
+}
+
+@Composable
+private fun QuickAction(
+    modifier: Modifier,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    tint: Color,
+    background: Color,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .5f))
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Surface(shape = RoundedCornerShape(14.dp), color = background) {
+                Icon(icon, null, tint = tint, modifier = Modifier.padding(9.dp).size(21.dp))
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(title, fontWeight = FontWeight.Black, fontSize = 12.5.sp)
+            Text(subtitle, color = V7Muted, fontSize = 9.4.sp, lineHeight = 12.sp, maxLines = 2)
+        }
+    }
+}
 
 @Composable
 fun HomeDashboard(
@@ -89,133 +183,99 @@ fun HomeDashboard(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var tripDialog by remember { mutableStateOf(false) }
-    var tripRefresh by remember { mutableIntStateOf(0) }
+    val sharedMapText by ExternalDestinationShare.text.collectAsState()
+
+    var showTripChooser by remember { mutableStateOf(false) }
     var routingBusy by remember { mutableStateOf(false) }
     var tripError by remember { mutableStateOf<String?>(null) }
-    val sharedMapText by ExternalDestinationShare.text.collectAsState()
+    var showHistory by remember { mutableStateOf(false) }
+    var fullHistory by remember { mutableStateOf<List<CloudEvent>>(emptyList()) }
+    var historyBusy by remember { mutableStateOf(false) }
     var resolvedSharedPlace by remember { mutableStateOf<SavedPlace?>(null) }
-    var resolvingSharedPlace by remember { mutableStateOf(false) }
-    val trip = remember(snapshot, tripRefresh) { AppPrefs.trip(context) }
-    val places = cloud?.places ?: AppPrefs.places(context)
-    val myId = AppPrefs.memberId(context)
 
-    val launchTrip: (SavedPlace) -> Unit = { place ->
-        tripError = null
+    val trip = AppPrefs.trip(context)
+    val places = cloud?.places ?: AppPrefs.places(context)
+    val members = cloud?.members.orEmpty()
+    val visibleMembers = members.filter { it.locationVisible }
+    val recent = cloud?.events.orEmpty().sortedByDescending { it.createdAt }.take(3)
+
+    fun launchTrip(place: SavedPlace) {
         val lat = snapshot.latitude
         val lon = snapshot.longitude
         if (lat == null || lon == null) {
             if (!trackingEnabled) onToggleTracking()
-            tripError = "Waiting for a fresh GPS fix. Location sharing has been requested; try again in a few seconds."
-        } else {
-            routingBusy = true
-            if (!trackingEnabled) onToggleTracking()
-            scope.launch {
-                val routeResult = withContext(Dispatchers.IO) {
-                    FamilyCloud.roadRoute(context, lat, lon, place.lat, place.lon)
-                }
-                routeResult.onSuccess { route ->
-                    val routeSync = withContext(Dispatchers.IO) {
-                        FamilyCloud.setTripRoute(context, route)
-                    }
-                    if (routeSync.isSuccess) {
-                        AppPrefs.startTrip(context, place, route)
-                        ContextCompat.startForegroundService(context, Intent(context, LocationTrackingService::class.java))
-                        withContext(Dispatchers.IO) {
-                            FamilyCloud.publishEvent(
-                                context,
-                                "TRIP_STARTED",
-                                AppPrefs.profileName(context) + " started a trip",
-                                "Going to " + place.name + " • " +
-                                    (if (route.distanceM < 1000f) route.distanceM.toInt().toString() + " m by road"
-                                    else "%.1f km by road".format(route.distanceM / 1000f)) +
-                                    " • ETA " + ((route.durationS + 59) / 60).coerceAtLeast(1) + " min"
-                            )
-                        }
-                        tripRefresh++
-                        onRefresh()
-                    } else {
-                        tripError = routeSync.exceptionOrNull()?.message ?: "Route could not be shared with the family."
-                    }
-                }.onFailure {
-                    tripError = it.message ?: "Road route could not be calculated. Please try again."
-                }
-                routingBusy = false
+            tripError = "Waiting for a fresh GPS fix. Turn on location sharing and try again in a few seconds."
+            return
+        }
+        routingBusy = true
+        scope.launch {
+            val route = withContext(Dispatchers.IO) {
+                FamilyCloud.roadRoute(context, lat, lon, place.lat, place.lon)
             }
+            route.onSuccess { road ->
+                val sync = withContext(Dispatchers.IO) { FamilyCloud.setTripRoute(context, road) }
+                if (sync.isSuccess) {
+                    AppPrefs.startTrip(context, place, road)
+                    ContextCompat.startForegroundService(context, Intent(context, LocationTrackingService::class.java))
+                    withContext(Dispatchers.IO) {
+                        FamilyCloud.publishEvent(
+                            context,
+                            "TRIP_STARTED",
+                            AppPrefs.profileName(context) + " started a trip",
+                            "Going to " + place.name + " • " +
+                                (if (road.distanceM < 1000f) road.distanceM.toInt().toString() + " m"
+                                else "%.1f km".format(road.distanceM / 1000f)) +
+                                " by road • ETA " + ((road.durationS + 59) / 60).coerceAtLeast(1) + " min"
+                        )
+                    }
+                    onRefresh()
+                } else {
+                    tripError = sync.exceptionOrNull()?.message ?: "Could not share route with family."
+                }
+            }.onFailure {
+                tripError = it.message ?: "Could not calculate the road route."
+            }
+            routingBusy = false
         }
     }
 
     LaunchedEffect(sharedMapText) {
         val text = sharedMapText ?: return@LaunchedEffect
-        resolvingSharedPlace = true
         val result = withContext(Dispatchers.IO) { FamilyCloud.resolveMapShare(context, text) }
-        resolvingSharedPlace = false
-        result.onSuccess { d ->
+        result.onSuccess {
             resolvedSharedPlace = SavedPlace(
                 id = "shared-" + System.currentTimeMillis(),
-                name = d.name,
-                lat = d.lat,
-                lon = d.lon
+                name = it.name,
+                lat = it.lat,
+                lon = it.lon
             )
         }.onFailure {
-            tripError = it.message ?: "Could not read the Google Maps location."
+            tripError = it.message ?: "Could not read the shared Google Maps destination."
             ExternalDestinationShare.consume()
         }
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+        modifier = Modifier.fillMaxSize().background(V7Canvas),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
-            AppHeader(
+            V7TopBar(
                 AppPrefs.familyName(context),
-                "Signed in as " + AppPrefs.profileName(context)
+                "Live family coordination • " + AppPrefs.profileName(context),
+                Icons.Default.Hub
             )
         }
 
         cloudError?.let { message ->
             item {
-                Surface(color = AmberSoft, shape = RoundedCornerShape(16.dp)) {
+                Surface(color = V7AmberSoft, shape = RoundedCornerShape(16.dp)) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.CloudOff, null, tint = Amber)
-                        Spacer(Modifier.width(9.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("Family sync interrupted", fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
-                            Text(message, color = Muted, fontSize = 10.5.sp, maxLines = 2)
-                        }
-                        IconButton(onClick = onRefresh) {
-                            Icon(Icons.Default.Refresh, "Refresh")
-                        }
-                    }
-                }
-            }
-        }
-
-        tripError?.let { message ->
-            item {
-                Surface(color = RoseSoft, shape = RoundedCornerShape(16.dp)) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Route, null, tint = Rose)
-                        Spacer(Modifier.width(9.dp))
-                        Text(message, color = Color(0xFF8E2B3D), fontSize = 11.sp, modifier = Modifier.weight(1f))
-                        IconButton(onClick = { tripError = null }) { Icon(Icons.Default.Close, "Dismiss") }
-                    }
-                }
-            }
-        }
-
-        if (routingBusy) {
-            item {
-                Surface(color = PurpleSoft, shape = RoundedCornerShape(16.dp)) {
-                    Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Column {
-                            Text("Calculating road route", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                            Text("Getting drivable path, road distance and ETA…", color = Muted, fontSize = 10.sp)
-                        }
+                        Icon(Icons.Default.CloudOff, null, tint = Color(0xFFB45309))
+                        Spacer(Modifier.width(8.dp))
+                        Text(message, fontSize = 10.5.sp, modifier = Modifier.weight(1f), color = V7Ink)
+                        IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, "Refresh") }
                     }
                 }
             }
@@ -223,59 +283,52 @@ fun HomeDashboard(
 
         item {
             Surface(
-                shape = RoundedCornerShape(27.dp),
+                shape = RoundedCornerShape(28.dp),
                 color = Color.Transparent,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(
+                Row(
                     Modifier.background(
-                        Brush.linearGradient(listOf(Color(0xFF173E70), Color(0xFF2F6FED), Color(0xFF2BB3C0))),
-                        RoundedCornerShape(27.dp)
-                    ).padding(20.dp)
+                        Brush.linearGradient(listOf(Color(0xFF0F3D75), Color(0xFF2563EB), Color(0xFF0891B2))),
+                        RoundedCornerShape(28.dp)
+                    ).padding(18.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("FAMILY NOW", color = Color(0xFFD6F3F6), fontSize = 10.5.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-                            Spacer(Modifier.height(5.dp))
-                            Text(
-                                if (trackingEnabled) "Live sharing is active" else "Location sharing is paused",
-                                color = Color.White,
-                                fontWeight = FontWeight.Black,
-                                fontSize = 22.sp
-                            )
-                            Text(
-                                if (trackingEnabled) "Family map and travel status update from this phone." else "Turn it on when you want your joined family to see your location.",
-                                color = Color(0xFFDAD9EC),
-                                fontSize = 11.5.sp,
-                                lineHeight = 16.sp
-                            )
-                        }
-                        Box(
-                            Modifier.size(58.dp).background(Color.White.copy(alpha = .11f), CircleShape),
-                            contentAlignment = Alignment.Center
+                    Column(Modifier.weight(1f)) {
+                        Text("FAMILY PULSE", color = Color.White.copy(alpha = .72f), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp)
+                        Spacer(Modifier.height(5.dp))
+                        Text(
+                            if (trackingEnabled) "You're sharing live" else "You're private right now",
+                            color = Color.White,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 21.sp
+                        )
+                        Text(
+                            visibleMembers.size.toString() + " family location" + if (visibleMembers.size == 1) "" else "s" + " available",
+                            color = Color.White.copy(alpha = .78f),
+                            fontSize = 10.5.sp
+                        )
+                        Spacer(Modifier.height(13.dp))
+                        FilledTonalButton(
+                            onClick = onToggleTracking,
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = Color.White.copy(alpha = .16f),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(14.dp)
                         ) {
-                            Icon(if (trackingEnabled) Icons.Default.GpsFixed else Icons.Default.LocationOff, null, tint = Color.White, modifier = Modifier.size(30.dp))
+                            Icon(if (trackingEnabled) Icons.Default.PauseCircle else Icons.Default.LocationOn, null, Modifier.size(17.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (trackingEnabled) "Pause my sharing" else "Share my location", fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
                         }
                     }
-                    Spacer(Modifier.height(16.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                        Button(
-                            onClick = onToggleTracking,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF292653)),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(if (trackingEnabled) "Pause sharing" else "Start sharing", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
-                        FilledTonalButton(
-                            onClick = onOpenMap,
-                            colors = ButtonDefaults.filledTonalButtonColors(containerColor = Color.White.copy(alpha=.13f), contentColor = Color.White),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Map, null, Modifier.size(17.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Live map", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Spacer(Modifier.width(12.dp))
+                    Surface(shape = RoundedCornerShape(22.dp), color = Color.White.copy(alpha = .13f)) {
+                        Column(Modifier.padding(13.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.Groups, null, tint = Color.White, modifier = Modifier.size(28.dp))
+                            Spacer(Modifier.height(4.dp))
+                            Text(members.size.toString(), color = Color.White, fontWeight = FontWeight.Black, fontSize = 20.sp)
+                            Text("members", color = Color.White.copy(alpha = .7f), fontSize = 8.5.sp)
                         }
                     }
                 }
@@ -284,158 +337,197 @@ fun HomeDashboard(
 
         if (trip.active) {
             item {
-                ActiveTripCard(
-                    destination = trip.destinationName ?: "Destination",
-                    remainingM = trip.remainingM,
-                    current = snapshot.speedKmh,
-                    average = trip.averageSpeed,
-                    max = trip.maxSpeed,
-                    eta = trip.etaMinutes,
-                    onEnd = {
-                        val destination = AppPrefs.trip(context).destinationName ?: "destination"
-                        AppPrefs.stopTrip(context)
-                        scope.launch(Dispatchers.IO) {
-                            FamilyCloud.clearTripRoute(context)
-                            FamilyCloud.publishEvent(
-                                context,
-                                "TRIP_ENDED",
-                                AppPrefs.profileName(context) + " ended the trip",
-                                "Trip to " + destination + " was ended."
+                V7Card {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(shape = CircleShape, color = V7BlueSoft) {
+                            Icon(Icons.Default.Navigation, null, tint = V7Blue, modifier = Modifier.padding(10.dp))
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Active trip", color = V7Muted, fontSize = 9.5.sp)
+                            Text(trip.destinationName ?: "Destination", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                            Text(
+                                (trip.remainingM?.let { if (it < 1000f) it.toInt().toString() + " m" else "%.1f km".format(it / 1000f) } ?: "…") +
+                                    " by road" + (trip.etaMinutes?.let { " • ETA " + it + " min" } ?: ""),
+                                color = V7Blue,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.5.sp
                             )
                         }
-                        ContextCompat.startForegroundService(context, Intent(context, LocationTrackingService::class.java))
-                        tripRefresh++
-                        onRefresh()
+                        TextButton(onClick = onOpenMap) { Text("View map") }
                     }
-                )
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(15.dp)).padding(10.dp),
+                        horizontalArrangement = Arrangement.SpaceAround
+                    ) {
+                        Metric("Current", trip.currentSpeed.toString() + " km/h")
+                        Metric("Average", trip.averageSpeed.toString() + " km/h")
+                        Metric("Maximum", trip.maxSpeed.toString() + " km/h")
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            val name = trip.destinationName ?: "destination"
+                            AppPrefs.stopTrip(context)
+                            scope.launch(Dispatchers.IO) {
+                                FamilyCloud.clearTripRoute(context)
+                                FamilyCloud.publishEvent(context, "TRIP_ENDED", AppPrefs.profileName(context) + " ended the trip", "Trip to " + name + " was ended.")
+                            }
+                            onRefresh()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Default.StopCircle, null, Modifier.size(17.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("End trip")
+                    }
+                }
+            }
+        }
+
+        item { V7Section("Quick actions") }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuickAction(Modifier.weight(1f), Icons.Default.Map, "Live map", "See everyone at a glance", V7Blue, V7BlueSoft, onOpenMap)
+                QuickAction(Modifier.weight(1f), Icons.Default.Route, "Start trip", "Share route, speed & ETA", V7Cyan, Color(0xFFECFEFF)) { showTripChooser = true }
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuickAction(Modifier.weight(1f), Icons.Default.PersonAddAlt1, "Family", "Invite, remove & manage", V7Green, V7GreenSoft, onOpenFamily)
+                QuickAction(Modifier.weight(1f), Icons.Default.LocationOn, "Places", "Home, office & alerts", Color(0xFF7C3AED), Color(0xFFF5F3FF), onOpenFamily)
+            }
+        }
+
+        item { V7Section("Family now", members.size.toString() + " people", onOpenFamily) }
+        if (members.isEmpty()) {
+            item {
+                V7Card {
+                    Text("No family member yet", fontWeight = FontWeight.Black)
+                    Text("Invite someone with a 6-digit code from the Family tab.", color = V7Muted, fontSize = 10.5.sp)
+                }
             }
         } else {
             item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    PremiumAction(
-                        Modifier.weight(1f),
-                        Icons.Default.Route,
-                        "Start trip",
-                        if (places.isEmpty()) "Add a destination first" else "Destination + ETA",
-                        PurpleSoft,
-                        Purple
-                    ) { tripDialog = true }
-                    PremiumAction(
-                        Modifier.weight(1f),
-                        Icons.Default.AddLocationAlt,
-                        "Places",
-                        "Home, office & more",
-                        MintSoft,
-                        Mint,
-                        onOpenFamily
-                    )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(members, key = { it.id }) { member ->
+                        Surface(
+                            modifier = Modifier.width(205.dp).clickable(onClick = onOpenMap),
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .5f))
+                        ) {
+                            Column(Modifier.padding(13.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        Modifier.size(38.dp).background(avatarColor(member.id), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(member.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Black)
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(member.name, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
+                                        Text(
+                                            if (!member.locationVisible) "Private"
+                                            else member.motion + " • " + ageText(member.updatedAt),
+                                            color = if (!member.locationVisible) V7Red else V7Muted,
+                                            fontSize = 8.8.sp,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(10.dp))
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Metric("Speed", if (member.speedVisible) member.speed.toString() + " km/h" else "Private")
+                                    Metric("Battery", if (member.batteryVisible && member.battery >= 0) member.battery.toString() + "%" else "Private")
+                                }
+                                if (member.tripActive && member.destinationName != null) {
+                                    Spacer(Modifier.height(9.dp))
+                                    Surface(color = V7BlueSoft, shape = RoundedCornerShape(12.dp)) {
+                                        Text(
+                                            "→ " + member.destinationName + (member.etaMinutes?.let { " • " + it + " min" } ?: ""),
+                                            Modifier.fillMaxWidth().padding(8.dp),
+                                            fontSize = 9.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = V7Blue,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
         item {
-            SectionTitle(
-                "Family status",
-                when {
-                    cloudBusy && cloud == null -> "Syncing…"
-                    cloud == null -> "No cloud data"
-                    else -> cloud.members.size.toString() + " joined"
+            V7Section("Recent activity", if (cloud?.events.orEmpty().size > 3) "See all" else null) {
+                historyBusy = true
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) { FamilyCloud.history(context, 150) }
+                    historyBusy = false
+                    result.onSuccess {
+                        fullHistory = it
+                        showHistory = true
+                    }.onFailure { tripError = it.message }
                 }
-            )
+            }
         }
 
-        val members = cloud?.members.orEmpty()
-        if (members.isEmpty()) {
+        if (recent.isEmpty()) {
             item {
-                PremiumCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconTile(Icons.Default.PersonAdd, PurpleSoft, Purple)
-                        Spacer(Modifier.width(11.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("No other family member yet", fontWeight = FontWeight.ExtraBold)
-                            Text("Share your invitation code; joined members will appear automatically.", color = Muted, fontSize = 10.5.sp)
-                        }
-                        TextButton(onClick = onOpenFamily) { Text("Invite") }
-                    }
+                V7Card {
+                    Text("Nothing new yet", fontWeight = FontWeight.Bold)
+                    Text("Arrivals, trips, check-ins and safety updates will appear here.", color = V7Muted, fontSize = 10.sp)
                 }
             }
         } else {
-            items(members.sortedBy { if (it.id == myId) 0 else 1 }, key = { it.id }) { member ->
-                CloudMemberCard(member, isMe = member.id == myId, onOpenMap = onOpenMap)
+            items(recent, key = { it.id }) { event ->
+                ActivityRow(event)
             }
         }
 
-        val events = cloud?.events.orEmpty().sortedByDescending { it.createdAt }.take(4)
-        if (events.isNotEmpty()) {
-            item { SectionTitle("Recent family updates") }
-            items(events, key = { it.id }) { event ->
-                Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    shape = RoundedCornerShape(18.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha=.45f))
-                ) {
-                    Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconTile(
-                            when (event.type) {
-                                "OVERSPEED" -> Icons.Default.Speed
-                                "PLACE_ENTER", "TRIP_ARRIVED" -> Icons.Default.CheckCircle
-                                "PLACE_APPROACH", "TRIP_APPROACHING" -> Icons.Default.NearMe
-                                else -> Icons.Default.NotificationsActive
-                            },
-                            if (event.type == "OVERSPEED") RoseSoft else PurpleSoft,
-                            if (event.type == "OVERSPEED") Rose else Purple,
-                            38
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(event.title, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
-                            Text(event.memberName + " • " + event.body, color = Muted, fontSize = 10.5.sp, maxLines = 2)
-                        }
-                        Text(ageText(event.createdAt), color = Muted, fontSize = 9.sp)
+        if (historyBusy || cloudBusy || routingBusy) {
+            item {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+
+        tripError?.let {
+            item {
+                Surface(color = V7RedSoft, shape = RoundedCornerShape(14.dp)) {
+                    Row(Modifier.padding(11.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Info, null, tint = V7Red, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text(it, color = V7Ink, fontSize = 10.5.sp, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { tripError = null }) { Icon(Icons.Default.Close, "Dismiss") }
                     }
                 }
             }
         }
-
-        item { Spacer(Modifier.height(4.dp)) }
     }
 
-    if (tripDialog) {
-        TripStartDialog(
+    if (showTripChooser) {
+        TripChooser(
             places = places,
-            onDismiss = { tripDialog = false },
-            onStart = { place ->
-                tripDialog = false
-                launchTrip(place)
+            onDismiss = { showTripChooser = false },
+            onSaved = {
+                showTripChooser = false
+                launchTrip(it)
             },
-            onNeedPlace = {
-                tripDialog = false
-                onOpenFamily()
-            },
-            onOpenGoogleMaps = {
-                tripDialog = false
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=")).apply {
+            onGoogleMaps = {
+                showTripChooser = false
+                val gm = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=")).apply {
                     setPackage("com.google.android.apps.maps")
                 }
-                runCatching { context.startActivity(intent) }.onFailure {
+                runCatching { context.startActivity(gm) }.onFailure {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://maps.google.com")))
                 }
             }
-        )
-    }
-
-    if (resolvingSharedPlace) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("Reading Google Maps place", fontWeight = FontWeight.Black) },
-            text = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(10.dp))
-                    Text("Getting the selected location…", color = Muted)
-                }
-            },
-            confirmButton = {}
         )
     }
 
@@ -445,13 +537,12 @@ fun HomeDashboard(
                 resolvedSharedPlace = null
                 ExternalDestinationShare.consume()
             },
-            icon = { Icon(Icons.Default.Map, null, tint = Purple) },
-            title = { Text("Start trip to this place?", fontWeight = FontWeight.Black) },
+            icon = { Icon(Icons.Default.Place, null, tint = V7Blue) },
+            title = { Text("Start trip here?", fontWeight = FontWeight.Black) },
             text = {
                 Column {
                     Text(place.name, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(6.dp))
-                    Text("Selected from Google Maps sharing.", color = Muted, fontSize = 11.sp)
+                    Text("Selected from Google Maps.", color = V7Muted, fontSize = 10.sp)
                 }
             },
             confirmButton = {
@@ -469,219 +560,170 @@ fun HomeDashboard(
             }
         )
     }
-}
 
-@Composable
-private fun ActiveTripCard(
-    destination: String,
-    remainingM: Float?,
-    current: Int,
-    average: Int,
-    max: Int,
-    eta: Int?,
-    onEnd: () -> Unit
-) {
-    PremiumCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconTile(Icons.Default.Navigation, PurpleSoft, Purple, 46)
-            Spacer(Modifier.width(11.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Travelling to", color = Muted, fontSize = 10.sp)
-                Text(destination, fontWeight = FontWeight.Black, fontSize = 17.sp)
-                Text(
-                    (remainingM?.let { if (it < 1000f) it.toInt().toString() + " m by road" else "%.1f km by road".format(it / 1000f) } ?: "Calculating road distance") +
-                        (eta?.let { " • Road ETA " + it + " min" } ?: ""),
-                    color = Muted,
-                    fontSize = 10.5.sp
-                )
+    if (showHistory) {
+        ActivityHistoryDialog(
+            events = fullHistory,
+            isOwner = AppPrefs.isOwner(context),
+            onDismiss = { showHistory = false },
+            onClearMine = {
+                scope.launch {
+                    withContext(Dispatchers.IO) { FamilyCloud.clearHistory(context, false) }
+                    val result = withContext(Dispatchers.IO) { FamilyCloud.history(context, 150) }
+                    fullHistory = result.getOrDefault(emptyList())
+                    onRefresh()
+                }
+            },
+            onClearFamily = {
+                scope.launch {
+                    withContext(Dispatchers.IO) { FamilyCloud.clearHistory(context, true) }
+                    fullHistory = emptyList()
+                    onRefresh()
+                }
             }
-            StatusPill("LIVE", MintSoft, Mint)
-        }
-        Spacer(Modifier.height(14.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TripMetric(Modifier.weight(1f), "Current", current.toString(), "km/h")
-            TripMetric(Modifier.weight(1f), "Average", average.toString(), "km/h")
-            TripMetric(Modifier.weight(1f), "Maximum", max.toString(), "km/h")
-        }
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = onEnd, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-            Icon(Icons.Default.StopCircle, null, Modifier.size(18.dp))
-            Spacer(Modifier.width(7.dp))
-            Text("End trip")
-        }
+        )
     }
 }
 
 @Composable
-private fun TripMetric(modifier: Modifier, label: String, value: String, unit: String) {
-    Surface(modifier = modifier, color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(15.dp)) {
-        Column(Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(value, fontWeight = FontWeight.Black, fontSize = 18.sp)
-            Text(unit, color = Purple, fontWeight = FontWeight.Bold, fontSize = 9.sp)
-            Text(label, color = Muted, fontSize = 9.sp)
-        }
-    }
-}
-
-@Composable
-private fun PremiumAction(
-    modifier: Modifier,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    subtitle: String,
-    bg: Color,
-    fg: Color,
-    onClick: () -> Unit
-) {
+private fun ActivityRow(event: CloudEvent) {
     Surface(
-        modifier = modifier.clickable(onClick = onClick),
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha=.48f))
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .45f))
     ) {
-        Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconTile(icon, bg, fg, 39)
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            val (icon, bg, fg) = when {
+                event.type == "SOS" -> Triple(Icons.Default.Sos, V7RedSoft, V7Red)
+                event.type.contains("TRIP") -> Triple(Icons.Default.Route, V7BlueSoft, V7Blue)
+                event.type.contains("PLACE") || event.type == "UNSAVED_STOP" -> Triple(Icons.Default.Place, V7GreenSoft, V7Green)
+                else -> Triple(Icons.Default.Notifications, Color(0xFFF1F5F9), V7Muted)
+            }
+            Surface(shape = RoundedCornerShape(12.dp), color = bg) {
+                Icon(icon, null, tint = fg, modifier = Modifier.padding(8.dp).size(18.dp))
+            }
             Spacer(Modifier.width(9.dp))
-            Column {
-                Text(title, fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
-                Text(subtitle, color = Muted, fontSize = 9.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
-}
-
-@Composable
-private fun CloudMemberCard(member: CloudMember, isMe: Boolean, onOpenMap: () -> Unit) {
-    val stale = System.currentTimeMillis() - member.updatedAt > 120_000L
-    PremiumCard(onClick = onOpenMap) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(48.dp).background(avatarColor(member.id), CircleShape), contentAlignment = Alignment.Center) {
-                Text(member.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Black)
-                Box(
-                    Modifier.align(Alignment.BottomEnd).size(13.dp)
-                        .background(if (stale) Color(0xFFA7A8B5) else Mint, CircleShape)
-                        .padding(1.dp)
-                )
-            }
-            Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
+                Text(event.title, fontWeight = FontWeight.Bold, fontSize = 11.5.sp, maxLines = 1)
+                Text(event.memberName + " • " + event.body, color = V7Muted, fontSize = 9.4.sp, maxLines = 2)
+            }
+            Text(ageText(event.createdAt), color = V7Muted, fontSize = 8.2.sp)
+        }
+    }
+}
+
+@Composable
+private fun ActivityHistoryDialog(
+    events: List<CloudEvent>,
+    isOwner: Boolean,
+    onDismiss: () -> Unit,
+    onClearMine: () -> Unit,
+    onClearFamily: () -> Unit
+) {
+    var confirm by remember { mutableStateOf<String?>(null) }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(.88f),
+            shape = RoundedCornerShape(26.dp),
+            color = MaterialTheme.colorScheme.background
+        ) {
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(member.name, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
-                    if (isMe) {
-                        Spacer(Modifier.width(7.dp))
-                        StatusPill("You", PurpleSoft, Purple)
+                    Text("Activity history", fontWeight = FontWeight.Black, fontSize = 20.sp, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close") }
+                }
+                Text("The server automatically prunes activity older than 90 days.", color = V7Muted, fontSize = 9.5.sp)
+                Spacer(Modifier.height(10.dp))
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (events.isEmpty()) {
+                        item {
+                            Text("No activity history.", color = V7Muted, modifier = Modifier.padding(12.dp))
+                        }
+                    } else {
+                        items(events, key = { it.id }) { ActivityRow(it) }
                     }
                 }
-                Text(
-                    if (!member.locationVisible) "Location sharing paused for you"
-                    else member.motion + " • " + ageText(member.updatedAt),
-                    color = if (!member.locationVisible) Rose else Muted,
-                    fontSize = 10.5.sp
-                )
-            }
-            if (!member.locationVisible) StatusPill("Private", RoseSoft, Rose)
-            else if (member.speedVisible && member.speed > 0) StatusPill(member.speed.toString() + " km/h", PurpleSoft, Purple)
-        }
-        Spacer(Modifier.height(11.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            SmallMetric("Battery", if (member.batteryVisible && member.battery >= 0) member.battery.toString() + "%" else "Private")
-            SmallMetric("Avg speed", if (member.speedVisible) member.avgSpeed.toString() + " km/h" else "Private")
-            SmallMetric("Max speed", if (member.speedVisible) member.maxSpeed.toString() + " km/h" else "Private")
-            SmallMetric("Updated", ageText(member.updatedAt))
-        }
-        member.destinationName?.let { destination ->
-            Spacer(Modifier.height(10.dp))
-            Surface(color = PurpleSoft.copy(alpha=.72f), shape = RoundedCornerShape(13.dp)) {
-                Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Route, null, tint = Purple, modifier = Modifier.size(17.dp))
-                    Spacer(Modifier.width(7.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("Going to " + destination, fontWeight = FontWeight.Bold, fontSize = 11.5.sp, color = Ink)
-                        Text(
-                            (member.remainingM?.let { if (it < 1000f) it.toInt().toString() + " m by road" else "%.1f km by road".format(it / 1000f) } ?: "Road distance updating") +
-                                (member.etaMinutes?.let { " • ETA " + it + " min" } ?: ""),
-                            color = Ink.copy(alpha=.66f),
-                            fontSize = 9.8.sp
-                        )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { confirm = "mine" }, modifier = Modifier.weight(1f)) {
+                        Text("Clear my activity", fontSize = 10.sp)
+                    }
+                    if (isOwner) {
+                        OutlinedButton(
+                            onClick = { confirm = "family" },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = V7Red)
+                        ) { Text("Clear family feed", fontSize = 10.sp) }
                     }
                 }
             }
         }
     }
-}
 
-@Composable
-private fun SmallMetric(label: String, value: String) {
-    Column {
-        Text(value, fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
-        Text(label, color = Muted, fontSize = 8.5.sp)
+    confirm?.let { which ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text("Clear activity history?") },
+            text = { Text(if (which == "family") "This will clear the family activity feed for everyone." else "This will delete activity generated by your account.") },
+            confirmButton = {
+                Button(onClick = {
+                    if (which == "family") onClearFamily() else onClearMine()
+                    confirm = null
+                }) { Text("Clear") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } }
+        )
     }
 }
 
 @Composable
-private fun TripStartDialog(
+private fun TripChooser(
     places: List<SavedPlace>,
     onDismiss: () -> Unit,
-    onStart: (SavedPlace) -> Unit,
-    onNeedPlace: () -> Unit,
-    onOpenGoogleMaps: () -> Unit
+    onSaved: (SavedPlace) -> Unit,
+    onGoogleMaps: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Where are you going?", fontWeight = FontWeight.Black) },
+        title = { Text("Choose destination", fontWeight = FontWeight.Black) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Surface(
-                    modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenGoogleMaps),
-                    color = PurpleSoft,
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onGoogleMaps),
+                    color = V7BlueSoft,
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Map, null, tint = Purple)
+                        Icon(Icons.Default.Map, null, tint = V7Blue)
                         Spacer(Modifier.width(9.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("Choose in Google Maps", fontWeight = FontWeight.Black, color = Ink)
-                            Text(
-                                "Pick any place in Google Maps → Share → Family Connect",
-                                color = Muted,
-                                fontSize = 9.8.sp
-                            )
+                            Text("Choose in Google Maps", fontWeight = FontWeight.Black)
+                            Text("Pick any place → Share → Family Connect", color = V7Muted, fontSize = 9.5.sp)
                         }
-                        Icon(Icons.Default.OpenInNew, null, tint = Purple)
+                        Icon(Icons.Default.OpenInNew, null, tint = V7Blue)
                     }
                 }
 
                 if (places.isNotEmpty()) {
-                    Text("Saved places", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    places.forEach { place ->
+                    Text("Saved places", color = V7Muted, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
+                    places.take(8).forEach { place ->
                         Surface(
-                            modifier = Modifier.fillMaxWidth().clickable { onStart(place) },
+                            modifier = Modifier.fillMaxWidth().clickable { onSaved(place) },
                             color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(15.dp)
+                            shape = RoundedCornerShape(14.dp)
                         ) {
-                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Place, null, tint = Purple)
-                                Spacer(Modifier.width(9.dp))
+                            Row(Modifier.padding(11.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Place, null, tint = V7Cyan, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
                                 Text(place.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                                Icon(Icons.Default.ChevronRight, null)
+                                Icon(Icons.Default.ChevronRight, null, modifier = Modifier.size(18.dp))
                             }
                         }
                     }
-                } else {
-                    Text(
-                        "No saved places yet. You can still choose any destination through Google Maps.",
-                        color = Muted,
-                        fontSize = 10.5.sp
-                    )
                 }
             }
         },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-        dismissButton = {
-            TextButton(onClick = onNeedPlace) { Text("Manage saved places") }
-        }
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
@@ -694,44 +736,30 @@ fun LiveFamilyMap(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val scope = rememberCoroutineScope()
-
-    Configuration.getInstance().userAgentValue = context.packageName
-
     val members = cloud?.members.orEmpty()
-    val locatedMembers = members.filter { it.lat != null && it.lon != null }
+    val located = members.filter { it.locationVisible && it.lat != null && it.lon != null }
     var selectedId by remember { mutableStateOf<String?>(null) }
-    var followSelected by remember { mutableStateOf(true) }
-    var cleanMapStyle by rememberSaveable { mutableStateOf(true) }
-    var mapError by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(locatedMembers.map { it.id }) {
-        if (selectedId == null || locatedMembers.none { it.id == selectedId }) {
-            selectedId = locatedMembers.firstOrNull()?.id
-        }
-    }
-
-    val selected = members.firstOrNull { it.id == selectedId } ?: locatedMembers.firstOrNull()
+    val selected = located.firstOrNull { it.id == selectedId } ?: located.firstOrNull()
 
     val routeCache = remember { mutableStateMapOf<String, RoadRoute>() }
     val routeVersionCache = remember { mutableStateMapOf<String, Long>() }
 
-    LaunchedEffect(
-        members.map { Triple(it.id, it.tripActive, it.routeUpdatedAt) }
-    ) {
+    LaunchedEffect(located.map { it.id }) {
+        if (selectedId == null || located.none { it.id == selectedId }) selectedId = located.firstOrNull()?.id
+    }
+
+    LaunchedEffect(members.map { Triple(it.id, it.tripActive, it.routeUpdatedAt) }) {
         val activeIds = members.filter { it.tripActive }.map { it.id }.toSet()
         routeCache.keys.toList().filterNot { it in activeIds }.forEach {
             routeCache.remove(it)
             routeVersionCache.remove(it)
         }
-
         members.filter { it.tripActive && it.routeUpdatedAt > 0L }.forEach { member ->
-            val loadedVersion = routeVersionCache[member.id]
-            if (loadedVersion != member.routeUpdatedAt) {
-                val result = withContext(Dispatchers.IO) { FamilyCloud.getTripRoute(context, member.id) }
-                result.onSuccess { route ->
-                    if (route.points.size >= 2) {
-                        routeCache[member.id] = route
+            if (routeVersionCache[member.id] != member.routeUpdatedAt) {
+                val route = withContext(Dispatchers.IO) { FamilyCloud.getTripRoute(context, member.id) }
+                route.onSuccess {
+                    if (it.points.size >= 2) {
+                        routeCache[member.id] = it
                         routeVersionCache[member.id] = member.routeUpdatedAt
                     }
                 }
@@ -739,55 +767,25 @@ fun LiveFamilyMap(
         }
     }
 
-    val initialCenter = selected?.let { member ->
-        if (member.lat != null && member.lon != null) GeoPoint(member.lat, member.lon) else null
-    } ?: if (snapshot.latitude != null && snapshot.longitude != null) {
-        GeoPoint(snapshot.latitude, snapshot.longitude)
-    } else {
-        GeoPoint(26.8467, 80.9462)
-    }
-
-    val cleanTileSource = remember {
-        XYTileSource(
-            "FamilyLight",
-            0,
-            20,
-            256,
-            ".png",
-            arrayOf(
-                "https://a.basemaps.cartocdn.com/light_all/",
-                "https://b.basemaps.cartocdn.com/light_all/",
-                "https://c.basemaps.cartocdn.com/light_all/"
-            ),
-            "© OpenStreetMap contributors © CARTO"
-        )
-    }
-
+    Configuration.getInstance().userAgentValue = context.packageName
     val mapView = remember {
         MapView(context).apply {
-            setTileSource(cleanTileSource)
+            setTileSource(TileSourceFactory.MAPNIK)
             setUseDataConnection(true)
             setMultiTouchControls(true)
             setBuiltInZoomControls(false)
-            minZoomLevel = 3.0
+            minZoomLevel = 4.0
             maxZoomLevel = 20.0
-            controller.setZoom(if (locatedMembers.isEmpty()) 12.5 else 16.4)
-            controller.setCenter(initialCenter)
+            controller.setZoom(17.0)
+            controller.setCenter(
+                selected?.let { GeoPoint(it.lat!!, it.lon!!) }
+                    ?: snapshot.latitude?.let { GeoPoint(it, snapshot.longitude ?: 0.0) }
+                    ?: GeoPoint(26.8467, 80.9462)
+            )
         }
-    }
-
-    LaunchedEffect(cleanMapStyle) {
-        mapView.setTileSource(if (cleanMapStyle) cleanTileSource else TileSourceFactory.MAPNIK)
-        mapView.invalidate()
     }
 
     DisposableEffect(lifecycleOwner, mapView) {
-        mapView.setOnTouchListener { _, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_MOVE) {
-                followSelected = false
-            }
-            false
-        }
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> mapView.onResume()
@@ -803,335 +801,151 @@ fun LiveFamilyMap(
         }
     }
 
-    fun fitSelectedRoute() {
-        val member = members.firstOrNull { it.id == selectedId } ?: return
-        val route = routeCache[member.id]
-        val points = mutableListOf<GeoPoint>()
-        member.lat?.let { lat -> member.lon?.let { lon -> points += GeoPoint(lat, lon) } }
-        route?.points?.forEach { points += GeoPoint(it.lat, it.lon) }
-        member.destinationLat?.let { lat -> member.destinationLon?.let { lon -> points += GeoPoint(lat, lon) } }
-
-        if (points.size >= 2) {
-            val north = points.maxOf { it.latitude }
-            val south = points.minOf { it.latitude }
-            val east = points.maxOf { it.longitude }
-            val west = points.minOf { it.longitude }
-            mapView.post {
-                runCatching {
-                    mapView.zoomToBoundingBox(
-                        org.osmdroid.util.BoundingBox(north, east, south, west),
-                        true,
-                        90
-                    )
-                }
-            }
-        } else if (member.lat != null && member.lon != null) {
-            mapView.controller.setZoom(16.4)
-            mapView.controller.animateTo(GeoPoint(member.lat, member.lon))
-        }
-    }
-
+    // Only selecting a different member recentres automatically. Movement updates never move the camera.
     LaunchedEffect(selectedId) {
-        val member = members.firstOrNull { it.id == selectedId }
-        if (member?.lat != null && member.lon != null) {
-            if (mapView.zoomLevelDouble < 16.0) mapView.controller.setZoom(16.4)
-            mapView.controller.animateTo(GeoPoint(member.lat, member.lon))
+        selected?.let {
+            mapView.controller.setZoom(17.0)
+            mapView.controller.animateTo(GeoPoint(it.lat!!, it.lon!!))
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
+    fun recenter() {
+        selected?.let {
+            mapView.controller.setZoom(17.0)
+            mapView.controller.animateTo(GeoPoint(it.lat!!, it.lon!!))
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Color(0xFFE9EEF5))) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { mapView },
             update = { map ->
-                runCatching {
-                    map.overlays.clear()
+                map.overlays.clear()
 
-                    // Route polylines come from a separate, cached request and are NOT part
-                    // of the frequent live-state payload.
-                    locatedMembers.forEach { member ->
-                        val route = routeCache[member.id]
-                        if (member.tripActive && route != null && route.points.size >= 2) {
+                located.forEach { member ->
+                    val route = routeCache[member.id]
+                    if (member.tripActive && route != null && route.points.size >= 2) {
+                        val split = nearestRouteIndex(member.lat!!, member.lon!!, route)
+                        if (split > 0) {
                             map.overlays.add(
                                 Polyline().apply {
-                                    setPoints(route.points.map { GeoPoint(it.lat, it.lon) })
-                                    outlinePaint.strokeWidth = if (member.id == selectedId) 8f else 5f
-                                    outlinePaint.color = if (member.id == selectedId) {
-                                        Purple.toArgb()
-                                    } else {
-                                        avatarColor(member.id).toArgb()
-                                    }
-                                    outlinePaint.alpha = if (member.id == selectedId) 235 else 125
-                                    isGeodesic = false
+                                    setPoints(route.points.take(split + 1).map { GeoPoint(it.lat, it.lon) })
+                                    outlinePaint.strokeWidth = 8f
+                                    outlinePaint.color = Color(0xFF94A3B8).toArgb()
                                 }
                             )
                         }
-                    }
-
-                    // Trip destinations.
-                    locatedMembers.forEach { member ->
-                        if (
-                            member.tripActive &&
-                            member.destinationLat != null &&
-                            member.destinationLon != null &&
-                            member.destinationName != null
-                        ) {
+                        if (split < route.points.lastIndex) {
                             map.overlays.add(
-                                Marker(map).apply {
-                                    position = GeoPoint(member.destinationLat, member.destinationLon)
-                                    icon = destinationMarkerDrawable(context, member)
-                                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                                    title = member.destinationName
-                                    snippet = member.name + " destination"
-                                    setOnMarkerClickListener { _, _ ->
-                                        selectedId = member.id
-                                        followSelected = true
-                                        true
-                                    }
+                                Polyline().apply {
+                                    setPoints(route.points.drop(split).map { GeoPoint(it.lat, it.lon) })
+                                    outlinePaint.strokeWidth = 9f
+                                    outlinePaint.color = V7Blue.toArgb()
                                 }
                             )
                         }
                     }
+                }
 
-                    // Every member's current live position.
-                    locatedMembers.forEach { member ->
-                        val point = GeoPoint(member.lat!!, member.lon!!)
+                located.forEach { member ->
+                    if (member.tripActive && member.destinationLat != null && member.destinationLon != null) {
                         map.overlays.add(
                             Marker(map).apply {
-                                position = point
-                                icon = memberMarkerDrawable(context, member, member.id == selectedId)
+                                position = GeoPoint(member.destinationLat, member.destinationLon)
+                                icon = destinationMarkerDrawable(context, member)
                                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                                title = member.name
-                                snippet = member.speed.toString() + " km/h • " + member.motion
-                                setOnMarkerClickListener { _, _ ->
-                                    selectedId = member.id
-                                    followSelected = true
-                                    if (map.zoomLevelDouble < 16.0) map.controller.setZoom(16.4)
-                                    map.controller.animateTo(point)
-                                    true
-                                }
+                                title = member.destinationName ?: "Destination"
                             }
                         )
                     }
-
-                    if (followSelected) {
-                        val member = members.firstOrNull { it.id == selectedId }
-                        if (member?.lat != null && member.lon != null) {
-                            map.controller.animateTo(GeoPoint(member.lat, member.lon))
-                        }
-                    }
-
-                    map.invalidate()
-                    mapError = null
-                }.onFailure {
-                    mapError = "Map rendering recovered from an error: " + (it.message ?: "unknown")
                 }
+
+                located.forEach { member ->
+                    map.overlays.add(
+                        Marker(map).apply {
+                            position = GeoPoint(member.lat!!, member.lon!!)
+                            icon = liveMemberMarker(context, member, member.id == selectedId)
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            setOnMarkerClickListener { _, _ ->
+                                selectedId = member.id
+                                true
+                            }
+                        }
+                    )
+                }
+                map.invalidate()
             }
         )
 
         Surface(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface.copy(alpha = .97f),
-            shape = RoundedCornerShape(18.dp),
             shadowElevation = 8.dp
         ) {
-            Row(
-                Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier.size(36.dp).background(PurpleSoft, RoundedCornerShape(11.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.Map, null, tint = Purple, modifier = Modifier.size(19.dp))
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = CircleShape, color = V7BlueSoft) {
+                    Icon(Icons.Default.Navigation, null, tint = V7Blue, modifier = Modifier.padding(9.dp))
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(9.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Family Live Map", fontWeight = FontWeight.Black, fontSize = 14.sp)
+                    Text("Live map", fontWeight = FontWeight.Black, fontSize = 14.5.sp)
                     Text(
-                        when {
-                            locatedMembers.isEmpty() -> "Waiting for a shared family location"
-                            locatedMembers.any { it.tripActive } ->
-                                locatedMembers.size.toString() + " live • trip progress updating"
-                            else -> locatedMembers.size.toString() + " live family member" + if (locatedMembers.size == 1) "" else "s"
-                        },
-                        color = Muted,
-                        fontSize = 9.5.sp
+                        if (located.isEmpty()) "No shared location yet"
+                        else located.size.toString() + " live • drag freely, recenter only when you choose",
+                        color = V7Muted,
+                        fontSize = 9.3.sp
                     )
                 }
-
-                IconButton(onClick = {
-                    cleanMapStyle = !cleanMapStyle
-                }) {
-                    Icon(
-                        Icons.Default.Layers,
-                        if (cleanMapStyle) "Use standard map" else "Use clean map",
-                        tint = if (cleanMapStyle) Sky else Muted
-                    )
-                }
-
-                IconButton(onClick = {
-                    followSelected = !followSelected
-                    if (followSelected) {
-                        selected?.let { m ->
-                            if (m.lat != null && m.lon != null) {
-                                mapView.controller.setZoom(16.4)
-                                mapView.controller.animateTo(GeoPoint(m.lat, m.lon))
-                            }
-                        }
-                    }
-                }) {
-                    Icon(
-                        if (followSelected) Icons.Default.GpsFixed else Icons.Default.GpsNotFixed,
-                        "Follow selected",
-                        tint = if (followSelected) Purple else Muted
-                    )
-                }
-
-                IconButton(onClick = { fitSelectedRoute() }) {
-                    Icon(Icons.Default.CropFree, "Fit selected route", tint = Purple)
-                }
-
                 if (!trackingEnabled) {
-                    IconButton(onClick = onStartTracking) {
-                        Icon(Icons.Default.MyLocation, "Share my location", tint = Purple)
-                    }
+                    IconButton(onClick = onStartTracking) { Icon(Icons.Default.LocationOn, "Share my location", tint = V7Blue) }
                 }
             }
         }
 
         Column(
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
+            Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SmallFloatingActionButton(
-                onClick = {
-                    followSelected = false
-                    mapView.controller.zoomIn()
-                },
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentColor = Ink
-            ) {
-                Icon(Icons.Default.Add, "Zoom in")
-            }
+                onClick = { mapView.controller.zoomIn() },
+                containerColor = MaterialTheme.colorScheme.surface
+            ) { Icon(Icons.Default.Add, "Zoom in") }
             SmallFloatingActionButton(
-                onClick = {
-                    followSelected = false
-                    mapView.controller.zoomOut()
-                },
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentColor = Ink
-            ) {
-                Icon(Icons.Default.Remove, "Zoom out")
-            }
-            SmallFloatingActionButton(
-                onClick = {
-                    followSelected = true
-                    selected?.let { m ->
-                        if (m.lat != null && m.lon != null) {
-                            mapView.controller.setZoom(16.4)
-                            mapView.controller.animateTo(GeoPoint(m.lat, m.lon))
-                        }
-                    }
-                },
-                containerColor = Purple,
-                contentColor = Color.White
-            ) {
-                Icon(Icons.Default.MyLocation, "Recenter")
-            }
-        }
-
-        mapError?.let { message ->
-            Surface(
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 76.dp, start = 12.dp, end = 12.dp),
-                color = RoseSoft,
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Text(message, Modifier.padding(10.dp), color = Color(0xFF8E2B3D), fontSize = 9.5.sp)
-            }
-        }
-
-        if (locatedMembers.isEmpty()) {
-            Surface(
-                modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = .96f),
-                shape = RoundedCornerShape(20.dp),
-                shadowElevation = 6.dp
-            ) {
-                Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.LocationSearching, null, tint = Purple, modifier = Modifier.size(30.dp))
-                    Spacer(Modifier.height(7.dp))
-                    Text("No live location yet", fontWeight = FontWeight.Black)
-                    Text(
-                        "On at least one family phone, turn on location sharing and allow precise location.",
-                        textAlign = TextAlign.Center,
-                        color = Muted,
-                        fontSize = 10.sp
-                    )
-                }
-            }
-        }
-
-        Surface(
-            modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 184.dp),
-            color = Color.White.copy(alpha = .78f),
-            shape = RoundedCornerShape(5.dp)
-        ) {
-            Text(
-                "© OSM © CARTO",
-                Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                fontSize = 7.sp,
-                color = Color(0xFF68768A)
-            )
+                onClick = { mapView.controller.zoomOut() },
+                containerColor = MaterialTheme.colorScheme.surface
+            ) { Icon(Icons.Default.Remove, "Zoom out") }
+            FloatingActionButton(
+                onClick = { recenter() },
+                containerColor = V7Blue,
+                contentColor = Color.White,
+                modifier = Modifier.size(54.dp)
+            ) { Icon(Icons.Default.MyLocation, "Recenter selected") }
         }
 
         Column(
             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            if (locatedMembers.size > 1) {
+            if (located.size > 1) {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    items(locatedMembers, key = { it.id }) { member ->
-                        val active = member.id == selected?.id
+                    items(located, key = { it.id }) { member ->
+                        val active = member.id == selectedId
                         Surface(
-                            modifier = Modifier.clickable {
-                                selectedId = member.id
-                                followSelected = true
-                                mapView.controller.setZoom(16.4)
-                                if (member.lat != null && member.lon != null) {
-                                    mapView.controller.animateTo(GeoPoint(member.lat, member.lon))
-                                }
-                            },
-                            color = if (active) Purple else MaterialTheme.colorScheme.surface.copy(alpha = .97f),
+                            modifier = Modifier.clickable { selectedId = member.id },
+                            color = if (active) V7Blue else MaterialTheme.colorScheme.surface.copy(alpha = .97f),
                             contentColor = if (active) Color.White else MaterialTheme.colorScheme.onSurface,
-                            shape = RoundedCornerShape(13.dp),
+                            shape = RoundedCornerShape(14.dp),
                             shadowElevation = 4.dp
                         ) {
-                            Row(
-                                Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    Modifier.size(22.dp).background(
-                                        if (active) Color.White.copy(alpha = .18f) else avatarColor(member.id),
-                                        CircleShape
-                                    ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        member.name.take(1).uppercase(),
-                                        fontSize = 8.5.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = Color.White
-                                    )
-                                }
-                                Spacer(Modifier.width(5.dp))
+                            Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(member.name, fontWeight = FontWeight.Bold, fontSize = 10.sp)
                                 Spacer(Modifier.width(5.dp))
-                                Text(member.speed.toString() + " km/h", fontSize = 9.sp)
+                                Text("• " + member.speed + " km/h", fontSize = 9.sp)
                             }
                         }
                     }
@@ -1140,15 +954,15 @@ fun LiveFamilyMap(
 
             selected?.let { member ->
                 Surface(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 9.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 10.dp),
+                    shape = RoundedCornerShape(24.dp),
                     color = MaterialTheme.colorScheme.surface.copy(alpha = .985f),
-                    shape = RoundedCornerShape(21.dp),
-                    shadowElevation = 10.dp
+                    shadowElevation = 12.dp
                 ) {
-                    Column(Modifier.padding(13.dp)) {
+                    Column(Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
-                                Modifier.size(41.dp).background(avatarColor(member.id), CircleShape),
+                                Modifier.size(42.dp).background(avatarColor(member.id), CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(member.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Black)
@@ -1159,55 +973,49 @@ fun LiveFamilyMap(
                                 Text(
                                     member.motion + " • " + ageText(member.updatedAt) +
                                         (member.accuracyM?.let { " • ±" + it.toInt() + " m" } ?: ""),
-                                    color = Muted,
-                                    fontSize = 9.4.sp
+                                    color = V7Muted,
+                                    fontSize = 9.2.sp
                                 )
                             }
-                            StatusPill(member.speed.toString() + " km/h", PurpleSoft, Purple)
+                            Surface(shape = RoundedCornerShape(12.dp), color = V7BlueSoft) {
+                                Text(member.speed.toString() + " km/h", Modifier.padding(horizontal = 9.dp, vertical = 5.dp), color = V7Blue, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                            }
                         }
 
-                        Spacer(Modifier.height(9.dp))
+                        Spacer(Modifier.height(10.dp))
                         Row(
-                            Modifier.fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(13.dp))
-                                .padding(9.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(14.dp)).padding(9.dp),
+                            horizontalArrangement = Arrangement.SpaceAround
                         ) {
-                            SmallMetric("Current", member.speed.toString() + " km/h")
-                            SmallMetric("Average", member.avgSpeed.toString() + " km/h")
-                            SmallMetric("Maximum", member.maxSpeed.toString() + " km/h")
-                            SmallMetric("Battery", if (member.battery >= 0) member.battery.toString() + "%" else "Private")
+                            Metric("Average", if (member.speedVisible) member.avgSpeed.toString() + " km/h" else "Private")
+                            Metric("Maximum", if (member.speedVisible) member.maxSpeed.toString() + " km/h" else "Private")
+                            Metric("Battery", if (member.batteryVisible && member.battery >= 0) member.battery.toString() + "%" else "Private")
+                            Metric(
+                                "Floor",
+                                member.floorEstimate?.let { "~" + if (it <= 0) "G" else it.toString() }
+                                    ?: member.altitudeM?.let { "%.0f m".format(it) } ?: "—"
+                            )
+                        }
+
+                        if (member.floorEstimate != null) {
+                            Text("Floor is an approximate altitude-based estimate and may be unavailable indoors.", color = V7Muted, fontSize = 8.sp)
                         }
 
                         if (member.tripActive && member.destinationName != null) {
                             Spacer(Modifier.height(9.dp))
-                            Row(
-                                Modifier.fillMaxWidth().background(PurpleSoft, RoundedCornerShape(13.dp)).padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Navigation, null, tint = Purple, modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        "Going to " + member.destinationName,
-                                        fontWeight = FontWeight.Black,
-                                        fontSize = 11.5.sp,
-                                        color = Ink
-                                    )
-                                    val distanceText = member.remainingM?.let {
-                                        if (it < 1000f) it.toInt().toString() + " m by road"
-                                        else "%.1f km by road".format(it / 1000f)
-                                    } ?: "Road distance updating"
-                                    Text(
-                                        distanceText +
-                                            (member.etaMinutes?.let { " • ETA " + it + " min" } ?: "") +
-                                            if (routeCache[member.id]?.points?.size ?: 0 >= 2) " • route loaded" else " • route loading",
-                                        color = Ink.copy(alpha = .67f),
-                                        fontSize = 9.6.sp
-                                    )
-                                }
-                                TextButton(onClick = { fitSelectedRoute() }) {
-                                    Text("FIT", fontSize = 9.sp, fontWeight = FontWeight.Black)
+                            Surface(color = V7BlueSoft, shape = RoundedCornerShape(14.dp)) {
+                                Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Flag, null, tint = V7Blue, modifier = Modifier.size(19.dp))
+                                    Spacer(Modifier.width(7.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Going to " + member.destinationName, fontWeight = FontWeight.Black, fontSize = 11.5.sp)
+                                        Text(
+                                            (member.remainingM?.let { if (it < 1000f) it.toInt().toString() + " m" else "%.1f km".format(it / 1000f) } ?: "…") +
+                                                " remaining" + (member.etaMinutes?.let { " • ETA " + it + " min" } ?: ""),
+                                            color = V7Muted,
+                                            fontSize = 9.4.sp
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1215,135 +1023,117 @@ fun LiveFamilyMap(
                 }
             }
         }
+
+        if (located.isEmpty()) {
+            Surface(
+                modifier = Modifier.align(Alignment.Center).padding(30.dp),
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = .96f)
+            ) {
+                Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.LocationSearching, null, tint = V7Blue, modifier = Modifier.size(32.dp))
+                    Spacer(Modifier.height(7.dp))
+                    Text("Waiting for live location", fontWeight = FontWeight.Black)
+                    Text("Ask a family member to enable location sharing.", color = V7Muted, fontSize = 10.sp, textAlign = TextAlign.Center)
+                }
+            }
+        }
     }
 }
 
-private fun destinationMarkerDrawable(context: Context, member: CloudMember): BitmapDrawable {
-    val w = 220
-    val h = 78
-    val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bitmap)
-
-    val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xF7FFFFFF.toInt() }
-    val rect = RectF(4f, 4f, (w - 4).toFloat(), 64f)
-    canvas.drawRoundRect(rect, 22f, 22f, bg)
-
-    val circle = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Purple.toArgb() }
-    canvas.drawCircle(31f, 34f, 20f, circle)
-
-    val flagPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.WHITE
-        strokeWidth = 4f
-        style = Paint.Style.STROKE
+private fun nearestRouteIndex(lat: Double, lon: Double, route: RoadRoute): Int {
+    if (route.points.isEmpty()) return 0
+    val out = FloatArray(1)
+    var best = 0
+    var bestDistance = Float.MAX_VALUE
+    route.points.forEachIndexed { index, point ->
+        android.location.Location.distanceBetween(lat, lon, point.lat, point.lon, out)
+        if (out[0] < bestDistance) {
+            bestDistance = out[0]
+            best = index
+        }
     }
-    canvas.drawLine(25f, 22f, 25f, 47f, flagPaint)
-    val flagFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.WHITE
-        style = Paint.Style.FILL
-    }
-    val flag = android.graphics.Path().apply {
-        moveTo(27f, 22f)
-        lineTo(45f, 28f)
-        lineTo(27f, 34f)
-        close()
-    }
-    canvas.drawPath(flag, flagFill)
-
-    val title = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF171829.toInt()
-        textSize = 19f
-        typeface = Typeface.DEFAULT_BOLD
-    }
-    val sub = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Purple.toArgb()
-        textSize = 15f
-        typeface = Typeface.DEFAULT_BOLD
-    }
-    canvas.drawText((member.destinationName ?: "Destination").take(18), 60f, 29f, title)
-    val info = (member.etaMinutes?.let { "ETA " + it + " min" } ?: "Destination") +
-        (member.remainingM?.let { " • " + if (it < 1000f) it.toInt().toString() + " m" else "%.1f km".format(it / 1000f) } ?: "")
-    canvas.drawText(info.take(24), 60f, 51f, sub)
-
-    val pin = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xF7FFFFFF.toInt() }
-    val path = android.graphics.Path().apply {
-        moveTo(98f, 63f)
-        lineTo(110f, 77f)
-        lineTo(122f, 63f)
-        close()
-    }
-    canvas.drawPath(path, pin)
-    return BitmapDrawable(context.resources, bitmap)
+    return best.coerceIn(0, route.points.lastIndex)
 }
 
-private fun memberMarkerDrawable(
-    context: Context,
-    member: CloudMember,
-    selected: Boolean
-): BitmapDrawable {
-    val w = 214
-    val h = 78
+private fun liveMemberMarker(context: Context, member: CloudMember, selected: Boolean): BitmapDrawable {
+    val w = 190
+    val h = 75
     val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
-
-    val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x22000000 }
-    canvas.drawRoundRect(RectF(6f, 8f, (w - 4).toFloat(), 65f), 25f, 25f, shadow)
 
     val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFAFFFFFF.toInt() }
     val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = if (selected) Purple.toArgb() else 0x22000000
+        color = if (selected) V7Blue.toArgb() else 0x22000000
         style = Paint.Style.STROKE
         strokeWidth = if (selected) 4f else 2f
     }
-    val rect = RectF(4f, 4f, (w - 6).toFloat(), 61f)
+    val rect = RectF(4f, 4f, 184f, 60f)
     canvas.drawRoundRect(rect, 24f, 24f, bg)
     canvas.drawRoundRect(rect, 24f, 24f, border)
 
     val avatar = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = avatarColor(member.id).toArgb() }
-    canvas.drawCircle(34f, 32f, 22f, avatar)
+    canvas.drawCircle(32f, 31f, 21f, avatar)
 
     val initial = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = android.graphics.Color.WHITE
-        textSize = 21f
+        textSize = 20f
         typeface = Typeface.DEFAULT_BOLD
         textAlign = Paint.Align.CENTER
     }
-    canvas.drawText(member.name.take(1).uppercase(), 34f, 39f, initial)
+    canvas.drawText(member.name.take(1).uppercase(), 32f, 38f, initial)
 
     val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF122033.toInt()
-        textSize = 18f
+        color = V7Ink.toArgb()
+        textSize = 17f
         typeface = Typeface.DEFAULT_BOLD
     }
     val infoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = if (member.speed > 0) Purple.toArgb() else 0xFF68768A.toInt()
-        textSize = 14f
+        color = V7Blue.toArgb()
+        textSize = 13f
         typeface = Typeface.DEFAULT_BOLD
     }
-    canvas.drawText(member.name.take(13), 66f, 28f, namePaint)
-    val info = if (member.locationVisible) {
-        member.speed.toString() + " km/h • " + member.motion.take(10)
-    } else {
-        "Location private"
-    }
-    canvas.drawText(info.take(20), 66f, 48f, infoPaint)
+    canvas.drawText(member.name.take(12), 61f, 27f, namePaint)
+    canvas.drawText(member.speed.toString() + " km/h • " + member.motion.take(8), 61f, 47f, infoPaint)
 
     val pin = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFAFFFFFF.toInt() }
     val path = android.graphics.Path().apply {
-        moveTo(92f, 60f)
-        lineTo(106f, 77f)
-        lineTo(120f, 60f)
-        close()
+        moveTo(84f, 59f); lineTo(96f, 74f); lineTo(108f, 59f); close()
     }
     canvas.drawPath(path, pin)
-
-    if (selected) {
-        val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Purple.toArgb() }
-        canvas.drawCircle(197f, 19f, 6f, dot)
-    }
-
     return BitmapDrawable(context.resources, bitmap)
 }
 
+private fun destinationMarkerDrawable(context: Context, member: CloudMember): BitmapDrawable {
+    val w = 176
+    val h = 68
+    val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFAFFFFFF.toInt() }
+    canvas.drawRoundRect(RectF(4f, 4f, 170f, 55f), 21f, 21f, bg)
+    val circle = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = V7Blue.toArgb() }
+    canvas.drawCircle(28f, 29f, 18f, circle)
+    val flag = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = 20f
+        typeface = Typeface.DEFAULT_BOLD
+        textAlign = Paint.Align.CENTER
+    }
+    canvas.drawText("⚑", 28f, 36f, flag)
+    val title = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = V7Ink.toArgb()
+        textSize = 15f
+        typeface = Typeface.DEFAULT_BOLD
+    }
+    canvas.drawText((member.destinationName ?: "Destination").take(15), 52f, 25f, title)
+    val sub = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = V7Blue.toArgb()
+        textSize = 12f
+        typeface = Typeface.DEFAULT_BOLD
+    }
+    canvas.drawText((member.etaMinutes?.let { "ETA " + it + " min" } ?: "Destination"), 52f, 43f, sub)
+    return BitmapDrawable(context.resources, bitmap)
+}
 
 @Composable
 fun FamilyAndPlacesScreen(
@@ -1353,134 +1143,148 @@ fun FamilyAndPlacesScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var addPlace by remember { mutableStateOf(false) }
-    var saving by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var shortInvite by remember { mutableStateOf<ShortInvite?>(null) }
-    var inviteBusy by remember { mutableStateOf(false) }
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val members = cloud?.members.orEmpty()
     val places = cloud?.places ?: AppPrefs.places(context)
+    val myId = AppPrefs.memberId(context)
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+    var invite by remember { mutableStateOf<ShortInvite?>(null) }
+    var inviteBusy by remember { mutableStateOf(false) }
+    var showAddPlace by remember { mutableStateOf(false) }
+    var removeTarget by remember { mutableStateOf<CloudMember?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+        modifier = Modifier.fillMaxSize().background(V7Canvas),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        item {
-            AppHeader(
-                AppPrefs.familyName(context),
-                members.size.toString() + " joined member" + if (members.size == 1) "" else "s"
-            )
-        }
+        item { V7TopBar("Family", "Invite people, manage access and places", Icons.Default.Groups) }
 
         item {
-            PremiumCard {
+            V7Card {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconTile(Icons.Default.PersonAddAlt1, SkySoft, Sky)
+                    Surface(shape = RoundedCornerShape(15.dp), color = V7GreenSoft) {
+                        Icon(Icons.Default.PersonAddAlt1, null, tint = V7Green, modifier = Modifier.padding(10.dp))
+                    }
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("Invite family member", fontWeight = FontWeight.Black, fontSize = 15.sp)
-                        Text("Use a short one-time code — no long invitation string.", color = Muted, fontSize = 10.5.sp)
+                        Text("Invite someone", fontWeight = FontWeight.Black, fontSize = 15.sp)
+                        Text("One-time 6-digit code • valid 10 minutes", color = V7Muted, fontSize = 9.8.sp)
                     }
-                }
-
-                Spacer(Modifier.height(13.dp))
-
-                if (shortInvite == null) {
                     Button(
                         enabled = !inviteBusy,
                         onClick = {
                             inviteBusy = true
-                            error = null
                             scope.launch {
                                 val result = withContext(Dispatchers.IO) { FamilyCloud.generateShortInvite(context) }
                                 inviteBusy = false
-                                result.onSuccess { shortInvite = it }
-                                    .onFailure { error = it.message ?: "Could not generate invite code" }
+                                result.onSuccess { invite = it }.onFailure { error = it.message }
                             }
                         },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp)
+                        shape = RoundedCornerShape(13.dp)
                     ) {
-                        if (inviteBusy) {
-                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.Key, null, Modifier.size(18.dp))
-                            Spacer(Modifier.width(7.dp))
-                            Text("Generate 6-digit code", fontWeight = FontWeight.Bold)
-                        }
+                        Text(if (invite == null) "Generate" else "New code", fontSize = 10.sp)
                     }
-                } else {
-                    val invite = shortInvite!!
-                    Surface(
-                        color = SkySoft,
-                        shape = RoundedCornerShape(17.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            Modifier.padding(15.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text("JOIN CODE", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-                            Spacer(Modifier.height(3.dp))
+                }
+
+                invite?.let { code ->
+                    Spacer(Modifier.height(12.dp))
+                    Surface(color = V7BlueSoft, shape = RoundedCornerShape(17.dp), modifier = Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                invite.code.chunked(3).joinToString("  "),
-                                color = Navy,
+                                code.code.chunked(3).joinToString("  "),
                                 fontWeight = FontWeight.Black,
-                                fontSize = 30.sp,
-                                letterSpacing = 4.sp
+                                fontSize = 28.sp,
+                                letterSpacing = 3.sp,
+                                color = V7Blue,
+                                modifier = Modifier.weight(1f)
                             )
-                            Text("Valid for 10 minutes • one use", color = Muted, fontSize = 9.5.sp)
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(
-                            onClick = { clipboard.setPrimaryClip(ClipData.newPlainText("Family Connect code", invite.code)) },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(13.dp)
-                        ) {
-                            Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Copy")
-                        }
-                        Button(
-                            onClick = {
+                            IconButton(onClick = {
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Family code", code.code))
+                            }) { Icon(Icons.Default.ContentCopy, "Copy") }
+                            IconButton(onClick = {
                                 val share = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
-                                    putExtra(
-                                        Intent.EXTRA_TEXT,
-                                        "Join my " + AppPrefs.familyName(context) + " family in Family Connect.\nCode: " + invite.code +
-                                            "\nThis code is valid for 10 minutes and can be used once."
-                                    )
+                                    putExtra(Intent.EXTRA_TEXT, "Join my " + AppPrefs.familyName(context) + " family in Family Connect. Code: " + code.code + " (valid 10 minutes, one use).")
                                 }
                                 context.startActivity(Intent.createChooser(share, "Share family code"))
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(13.dp)
-                        ) {
-                            Icon(Icons.Default.Share, null, Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Share")
+                            }) { Icon(Icons.Default.Share, "Share") }
                         }
                     }
-                    TextButton(
-                        onClick = {
-                            shortInvite = null
-                            inviteBusy = true
-                            scope.launch {
-                                val result = withContext(Dispatchers.IO) { FamilyCloud.generateShortInvite(context) }
-                                inviteBusy = false
-                                result.onSuccess { shortInvite = it }
-                                    .onFailure { error = it.message ?: "Could not refresh code" }
-                            }
-                        },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                }
+            }
+        }
+
+        item { V7Section("People", members.size.toString() + " joined") { onRefresh() } }
+        items(members, key = { it.id }) { member ->
+            V7Card {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(44.dp).background(avatarColor(member.id), CircleShape),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Default.Refresh, null, Modifier.size(15.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text("Generate new code", fontSize = 10.5.sp)
+                        Text(member.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Black)
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(member.name + if (member.id == myId) "  • You" else "", fontWeight = FontWeight.Black, fontSize = 13.5.sp)
+                        Text(
+                            if (!member.locationVisible && member.id != myId) "Location hidden from you"
+                            else member.motion + " • " + ageText(member.updatedAt),
+                            color = V7Muted,
+                            fontSize = 9.4.sp
+                        )
+                    }
+                    if (AppPrefs.isOwner(context) && member.id != myId) {
+                        IconButton(onClick = { removeTarget = member }) {
+                            Icon(Icons.Default.PersonRemove, "Remove member", tint = V7Red)
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            V7Section("Places", "Add place") { showAddPlace = true }
+        }
+
+        if (places.isEmpty()) {
+            item {
+                V7Card {
+                    Text("No saved places yet", fontWeight = FontWeight.Black)
+                    Text("Add Home, Office, School or any place to get approach, arrival and leave alerts.", color = V7Muted, fontSize = 10.sp)
+                }
+            }
+        } else {
+            items(places, key = { it.id }) { place ->
+                val target = members.firstOrNull { it.id == place.watchMemberId }?.name ?: "Everyone"
+                V7Card {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(shape = RoundedCornerShape(14.dp), color = Color(0xFFF5F3FF)) {
+                            Icon(
+                                if (place.name.contains("home", true)) Icons.Default.Home
+                                else if (place.name.contains("office", true)) Icons.Default.Business
+                                else Icons.Default.Place,
+                                null,
+                                tint = Color(0xFF7C3AED),
+                                modifier = Modifier.padding(9.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(9.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(place.name, fontWeight = FontWeight.Black, fontSize = 12.5.sp)
+                            Text("For " + target + " • radius " + place.radiusM.toInt() + " m", color = V7Muted, fontSize = 9.4.sp)
+                        }
+                        IconButton(onClick = {
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) { FamilyCloud.deletePlace(context, place.id) }
+                                result.onSuccess {
+                                    AppPrefs.replacePlaces(context, it.places)
+                                    onRefresh()
+                                }.onFailure { error = it.message }
+                            }
+                        }) { Icon(Icons.Default.DeleteOutline, "Delete", tint = V7Red) }
                     }
                 }
             }
@@ -1488,139 +1292,57 @@ fun FamilyAndPlacesScreen(
 
         error?.let {
             item {
-                Surface(color = RoseSoft, shape = RoundedCornerShape(14.dp)) {
-                    Text(it, Modifier.padding(12.dp), color = Color(0xFF972A3C), fontSize = 10.5.sp)
+                Surface(color = V7RedSoft, shape = RoundedCornerShape(14.dp)) {
+                    Text(it, Modifier.padding(11.dp), color = V7Ink, fontSize = 10.5.sp)
                 }
-            }
-        }
-
-        item { SectionTitle("Joined family", members.size.toString() + " members") }
-        if (members.isEmpty()) {
-            item { Text("Syncing joined members…", color = Muted, fontSize = 11.sp) }
-        } else {
-            items(members, key = { it.id }) { member ->
-                PremiumCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(44.dp).background(avatarColor(member.id), CircleShape), contentAlignment = Alignment.Center) {
-                            Text(member.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Black)
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(member.name, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp)
-                            Text(member.motion + " • " + ageText(member.updatedAt), color = Muted, fontSize = 10.sp)
-                        }
-                        if (member.speed > 0) StatusPill(member.speed.toString() + " km/h", PurpleSoft, Purple)
-                    }
-                }
-            }
-        }
-
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SectionTitle("Saved places", places.size.toString() + " rules")
-            }
-        }
-
-        item {
-            Button(
-                onClick = { addPlace = true },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(15.dp)
-            ) {
-                Icon(Icons.Default.AddLocationAlt, null)
-                Spacer(Modifier.width(7.dp))
-                Text("Add Home, Office or another place", fontWeight = FontWeight.Bold)
-            }
-        }
-
-        if (places.isEmpty()) {
-            item {
-                PremiumCard {
-                    Text("No place rules yet", fontWeight = FontWeight.Bold)
-                    Text(
-                        "Create a place, choose which joined member it applies to, and their phone can publish approach, arrival and leave alerts.",
-                        color = Muted,
-                        fontSize = 10.5.sp,
-                        lineHeight = 15.sp
-                    )
-                }
-            }
-        } else {
-            items(places, key = { it.id }) { place ->
-                val target = members.firstOrNull { it.id == place.watchMemberId }?.name ?: "Everyone"
-                PremiumCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconTile(
-                            if (place.name.contains("home", true)) Icons.Default.Home
-                            else if (place.name.contains("office", true)) Icons.Default.Business
-                            else Icons.Default.Place,
-                            MintSoft,
-                            Mint
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(place.name, fontWeight = FontWeight.ExtraBold)
-                            Text(
-                                "For " + target + " • enter/leave • approach around 1 km • radius " + place.radiusM.toInt() + " m",
-                                color = Muted,
-                                fontSize = 9.8.sp,
-                                maxLines = 2
-                            )
-                        }
-                        IconButton(onClick = {
-                            saving = true
-                            scope.launch {
-                                val result = withContext(Dispatchers.IO) { FamilyCloud.deletePlace(context, place.id) }
-                                saving = false
-                                result.onSuccess {
-                                    AppPrefs.replacePlaces(context, it.places)
-                                    onRefresh()
-                                }.onFailure { error = it.message }
-                            }
-                        }) {
-                            Icon(Icons.Default.DeleteOutline, "Delete", tint = Rose)
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            TextButton(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) {
-                if (saving) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                else Icon(Icons.Default.Sync, null, Modifier.size(17.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Refresh family")
             }
         }
     }
 
-    if (addPlace) {
-        AddPlaceDialog(
+    if (showAddPlace) {
+        AddPlaceDialogV7(
             snapshot = snapshot,
             members = members,
-            onDismiss = { addPlace = false },
+            onDismiss = { showAddPlace = false },
             onSave = { place ->
-                saving = true
-                error = null
                 scope.launch {
                     val result = withContext(Dispatchers.IO) { FamilyCloud.upsertPlace(context, place) }
-                    saving = false
                     result.onSuccess {
                         AppPrefs.replacePlaces(context, it.places)
-                        addPlace = false
+                        showAddPlace = false
                         onRefresh()
-                    }.onFailure {
-                        error = it.message ?: "Could not save place"
-                    }
+                    }.onFailure { error = it.message }
                 }
             }
+        )
+    }
+
+    removeTarget?.let { member ->
+        AlertDialog(
+            onDismissRequest = { removeTarget = null },
+            title = { Text("Remove " + member.name + "?", fontWeight = FontWeight.Black) },
+            text = { Text("They will immediately lose access to new family location updates and shared information.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) { FamilyCloud.removeMember(context, member.id) }
+                            result.onSuccess {
+                                removeTarget = null
+                                onRefresh()
+                            }.onFailure { error = it.message }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = V7Red)
+                ) { Text("Remove") }
+            },
+            dismissButton = { TextButton(onClick = { removeTarget = null }) { Text("Cancel") } }
         )
     }
 }
 
 @Composable
-private fun AddPlaceDialog(
+private fun AddPlaceDialogV7(
     snapshot: DeviceSnapshot,
     members: List<CloudMember>,
     onDismiss: () -> Unit,
@@ -1630,43 +1352,23 @@ private fun AddPlaceDialog(
     var lat by rememberSaveable { mutableStateOf(snapshot.latitude?.toString() ?: "") }
     var lon by rememberSaveable { mutableStateOf(snapshot.longitude?.toString() ?: "") }
     var radius by rememberSaveable { mutableFloatStateOf(180f) }
-    var selectedMemberId by rememberSaveable { mutableStateOf(members.firstOrNull()?.id) }
+    var target by rememberSaveable { mutableStateOf(members.firstOrNull()?.id) }
     var menu by remember { mutableStateOf(false) }
-
-    val valid = name.trim().length >= 2 && lat.toDoubleOrNull() != null && lon.toDoubleOrNull() != null
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add smart place", fontWeight = FontWeight.Black) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    listOf("Home", "Office", "School", "Parents", "Gym").forEach { preset ->
-                        AssistChip(onClick = { name = preset }, label = { Text(preset) })
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("Home", "Office", "School", "Parents", "Gym").forEach {
+                        AssistChip(onClick = { name = it }, label = { Text(it) })
                     }
                 }
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Place name") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                OutlinedTextField(name, { name = it }, label = { Text("Place name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = lat,
-                        onValueChange = { lat = it },
-                        label = { Text("Latitude") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = lon,
-                        onValueChange = { lon = it },
-                        label = { Text("Longitude") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
+                    OutlinedTextField(lat, { lat = it }, label = { Text("Latitude") }, modifier = Modifier.weight(1f), singleLine = true)
+                    OutlinedTextField(lon, { lon = it }, label = { Text("Longitude") }, modifier = Modifier.weight(1f), singleLine = true)
                 }
                 if (snapshot.latitude != null && snapshot.longitude != null) {
                     TextButton(onClick = {
@@ -1674,59 +1376,44 @@ private fun AddPlaceDialog(
                         lon = snapshot.longitude.toString()
                     }) {
                         Icon(Icons.Default.MyLocation, null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.width(5.dp))
                         Text("Use my current location")
                     }
                 }
-                Text("Arrival radius: " + radius.toInt() + " m", fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                Slider(value = radius, onValueChange = { radius = it }, valueRange = 100f..500f, steps = 7)
-
-                Text("Apply this place rule to", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                Text("Arrival radius: " + radius.toInt() + " m", fontWeight = FontWeight.Bold, fontSize = 10.5.sp)
+                Slider(radius, { radius = it }, valueRange = 100f..500f, steps = 7)
                 Box {
                     OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(members.firstOrNull { it.id == selectedMemberId }?.name ?: "Select member", modifier = Modifier.weight(1f))
+                        Text(members.firstOrNull { it.id == target }?.name ?: "Select member", modifier = Modifier.weight(1f))
                         Icon(Icons.Default.ArrowDropDown, null)
                     }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         members.forEach { member ->
                             DropdownMenuItem(
                                 text = { Text(member.name) },
-                                onClick = {
-                                    selectedMemberId = member.id
-                                    if (member.lat != null && member.lon != null) {
-                                        lat = member.lat.toString()
-                                        lon = member.lon.toString()
-                                    }
-                                    menu = false
-                                }
+                                onClick = { target = member.id; menu = false }
                             )
                         }
                     }
                 }
-                Text(
-                    "The selected member's phone will detect approximately 1 km approach, arrival and leaving this radius while location sharing is active.",
-                    color = Muted,
-                    fontSize = 9.8.sp,
-                    lineHeight = 13.sp
-                )
             }
         },
         confirmButton = {
             Button(
-                enabled = valid && selectedMemberId != null,
+                enabled = name.trim().length >= 2 && lat.toDoubleOrNull() != null && lon.toDoubleOrNull() != null && target != null,
                 onClick = {
                     onSave(
                         SavedPlace(
-                            id = UUID.randomUUID().toString(),
-                            name = name.trim(),
-                            lat = lat.toDouble(),
-                            lon = lon.toDouble(),
-                            radiusM = radius,
-                            watchMemberId = selectedMemberId
+                            UUID.randomUUID().toString(),
+                            name.trim(),
+                            lat.toDouble(),
+                            lon.toDouble(),
+                            radius,
+                            target
                         )
                     )
                 }
-            ) { Text("Save place") }
+            ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
@@ -1742,26 +1429,44 @@ fun SafetyCentre(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var sosActive by rememberSaveable { mutableStateOf(false) }
-    var sentText by remember { mutableStateOf<String?>(null) }
+    var checkinDialog by remember { mutableStateOf(false) }
+    var lastAction by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+        modifier = Modifier.fillMaxSize().background(V7Canvas),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        item { AppHeader("Safety Centre", "Visible, consent-based family safety") }
+        item { V7TopBar("Safety", "Emergency tools that stay visible and explicit", Icons.Default.HealthAndSafety) }
+
         item {
-            PremiumCard {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                shape = RoundedCornerShape(28.dp),
+                color = Color.Transparent,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    Modifier.background(
+                        Brush.linearGradient(
+                            if (sosActive) listOf(Color(0xFF9F1239), Color(0xFFE11D48))
+                            else listOf(Color(0xFF4C0519), Color(0xFFBE123C), Color(0xFFE11D48))
+                        ),
+                        RoundedCornerShape(28.dp)
+                    ).padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("EMERGENCY SOS", color = Color.White.copy(alpha = .75f), fontWeight = FontWeight.Bold, fontSize = 9.sp, letterSpacing = 1.5.sp)
+                    Spacer(Modifier.height(11.dp))
                     Box(
-                        Modifier.size(132.dp)
-                            .background(if (sosActive) Color(0xFFC8324A) else Rose, CircleShape)
+                        Modifier.size(118.dp)
+                            .background(Color.White.copy(alpha = .13f), CircleShape)
                             .combinedClickable(
                                 onClick = {},
                                 onLongClick = {
                                     sosActive = !sosActive
                                     if (sosActive) {
                                         onStartTracking()
+                                        EmergencyAudio.start(context)
                                         scope.launch(Dispatchers.IO) {
                                             FamilyCloud.publishEvent(
                                                 context,
@@ -1770,17 +1475,18 @@ fun SafetyCentre(
                                                 "Emergency assistance requested. Open Family Connect for live location."
                                             )
                                         }
-                                        sentText = "SOS shared with the family cloud"
+                                        lastAction = "SOS sent to family"
                                     } else {
+                                        EmergencyAudio.stop()
                                         scope.launch(Dispatchers.IO) {
                                             FamilyCloud.publishEvent(
                                                 context,
                                                 "SOS_END",
                                                 "SOS ended by " + AppPrefs.profileName(context),
-                                                "The SOS session has been ended."
+                                                "The emergency SOS session was ended."
                                             )
                                         }
-                                        sentText = "SOS ended"
+                                        lastAction = "SOS ended"
                                     }
                                     onRefresh()
                                 }
@@ -1788,16 +1494,21 @@ fun SafetyCentre(
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(if (sosActive) Icons.Default.StopCircle else Icons.Default.Sos, null, tint = Color.White, modifier = Modifier.size(42.dp))
-                            Text(if (sosActive) "END SOS" else "SOS", color = Color.White, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                            Icon(if (sosActive) Icons.Default.StopCircle else Icons.Default.Sos, null, tint = Color.White, modifier = Modifier.size(40.dp))
+                            Text(if (sosActive) "END" else "HOLD", color = Color.White, fontWeight = FontWeight.Black, fontSize = 15.sp)
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
-                    Text(if (sosActive) "SOS live session active" else "Long-press for SOS", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                    Spacer(Modifier.height(11.dp))
                     Text(
-                        if (sosActive) "Location sharing is active • battery " + snapshot.battery + "% • " + snapshot.network
-                        else "Starts live location and publishes a high-priority family event.",
-                        color = Muted,
+                        if (sosActive) "SOS active • alarm sounding" else "Long-press to start SOS",
+                        color = Color.White,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 16.sp
+                    )
+                    Text(
+                        if (sosActive) "Live location + battery " + snapshot.battery + "% are being shared."
+                        else "Sends an urgent family alert and starts live location.",
+                        color = Color.White.copy(alpha = .78f),
                         fontSize = 10.5.sp,
                         textAlign = TextAlign.Center
                     )
@@ -1805,73 +1516,111 @@ fun SafetyCentre(
             }
         }
 
+        item { V7Section("Emergency actions") }
+
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                PremiumAction(
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuickAction(
                     Modifier.weight(1f),
                     Icons.Default.HowToReg,
-                    "I'm safe",
-                    "Send family check-in",
-                    MintSoft,
-                    Mint
-                ) {
-                    scope.launch(Dispatchers.IO) {
-                        FamilyCloud.publishEvent(
-                            context,
-                            "CHECKIN_OK",
-                            AppPrefs.profileName(context) + " checked in",
-                            "I'm fine."
-                        )
-                    }
-                    sentText = "Check-in sent"
-                    onRefresh()
-                }
-                PremiumAction(
+                    "Check in",
+                    "Send status + optional message",
+                    V7Green,
+                    V7GreenSoft
+                ) { checkinDialog = true }
+                QuickAction(
                     Modifier.weight(1f),
-                    Icons.Default.LiveHelp,
-                    "Check on me",
-                    "Ask family to follow",
-                    PurpleSoft,
-                    Purple
+                    Icons.Default.MyLocation,
+                    "Share live",
+                    "Start location sharing now",
+                    V7Blue,
+                    V7BlueSoft
                 ) {
                     onStartTracking()
-                    scope.launch(Dispatchers.IO) {
-                        FamilyCloud.publishEvent(
-                            context,
-                            "CHECKIN_REQUEST",
-                            AppPrefs.profileName(context) + " started a safety watch",
-                            "Live location sharing has been requested for this journey."
-                        )
-                    }
-                    sentText = "Safety watch started"
-                    onRefresh()
-                }
-            }
-        }
-
-        sentText?.let {
-            item {
-                Surface(color = MintSoft, shape = RoundedCornerShape(15.dp)) {
-                    Text(it, Modifier.padding(12.dp), color = Color(0xFF176745), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    lastAction = "Live location sharing started"
                 }
             }
         }
 
         item {
-            Surface(color = PurpleSoft.copy(alpha=.7f), shape = RoundedCornerShape(18.dp)) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.PrivacyTip, null, tint = Purple)
+            V7Card {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = CircleShape, color = Color(0xFFF5F3FF)) {
+                        Icon(Icons.Default.PrivacyTip, null, tint = Color(0xFF7C3AED), modifier = Modifier.padding(9.dp))
+                    }
                     Spacer(Modifier.width(9.dp))
-                    Text(
-                        "No hidden camera, microphone or message reading is used. Android permissions remain authoritative.",
-                        color = Ink.copy(alpha=.75f),
-                        fontSize = 10.5.sp,
-                        lineHeight = 14.sp
-                    )
+                    Column {
+                        Text("Visible safety only", fontWeight = FontWeight.Black, fontSize = 12.5.sp)
+                        Text("No hidden microphone, camera or message reading is used.", color = V7Muted, fontSize = 9.5.sp)
+                    }
+                }
+            }
+        }
+
+        lastAction?.let {
+            item {
+                Surface(color = V7GreenSoft, shape = RoundedCornerShape(14.dp)) {
+                    Text(it, Modifier.padding(11.dp), color = Color(0xFF065F46), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
     }
+
+    if (checkinDialog) {
+        CheckInDialog(
+            onDismiss = { checkinDialog = false },
+            onSend = { status, message ->
+                checkinDialog = false
+                scope.launch(Dispatchers.IO) {
+                    FamilyCloud.publishEvent(
+                        context,
+                        if (status == "Need Help") "CHECKIN_HELP" else "CHECKIN_OK",
+                        AppPrefs.profileName(context) + " checked in: " + status,
+                        if (message.isBlank()) status else status + " • " + message.trim()
+                    )
+                }
+                lastAction = "Check-in sent"
+                onRefresh()
+            }
+        )
+    }
+}
+
+@Composable
+private fun CheckInDialog(
+    onDismiss: () -> Unit,
+    onSend: (String, String) -> Unit
+) {
+    var status by rememberSaveable { mutableStateOf("I'm Fine") }
+    var message by rememberSaveable { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Send check-in", fontWeight = FontWeight.Black) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    listOf("I'm Fine", "Call Me", "Need Help").forEach { option ->
+                        FilterChip(
+                            selected = status == option,
+                            onClick = { status = option },
+                            label = { Text(option, fontSize = 9.5.sp) }
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = message,
+                    onValueChange = { message = it.take(240) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Optional message") },
+                    placeholder = { Text("e.g. Reached safely, call me in 10 min") },
+                    minLines = 3,
+                    maxLines = 5
+                )
+            }
+        },
+        confirmButton = { Button(onClick = { onSend(status, message) }) { Text("Send") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
@@ -1885,325 +1634,212 @@ fun PrivacyProfile(
     val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
 
+    var rules by remember { mutableStateOf<List<SharingRule>>(emptyList()) }
+    var rulesBusy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
     var shareSpeed by rememberSaveable { mutableStateOf(prefs.getBoolean("share_speed", true)) }
     var shareBattery by rememberSaveable { mutableStateOf(prefs.getBoolean("share_battery", true)) }
-    var speedLimit by rememberSaveable { mutableIntStateOf(prefs.getInt("speed_limit", 80)) }
+    var smartStops by rememberSaveable { mutableStateOf(prefs.getBoolean("unsaved_stop_alerts", false)) }
+    var stopMinutes by rememberSaveable { mutableIntStateOf(prefs.getInt("unsaved_stop_minutes", 10)) }
 
-    var sharingRules by remember { mutableStateOf<List<SharingRule>>(emptyList()) }
-    var sharingBusy by remember { mutableStateOf(false) }
-    var sharingError by remember { mutableStateOf<String?>(null) }
-
-    val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-    val background = if (Build.VERSION.SDK_INT >= 29) {
-        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
-    } else true
-    val notification = if (Build.VERSION.SDK_INT >= 33) {
-        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-    } else true
-
-    suspend fun reloadSharing() {
-        sharingBusy = true
+    suspend fun reloadRules() {
+        rulesBusy = true
         val result = withContext(Dispatchers.IO) { FamilyCloud.getSharing(context) }
-        sharingBusy = false
-        result.onSuccess {
-            sharingRules = it
-            sharingError = null
-        }.onFailure {
-            sharingError = it.message ?: "Could not load sharing controls"
-        }
+        rulesBusy = false
+        result.onSuccess { rules = it; error = null }.onFailure { error = it.message }
     }
 
-    fun updateRule(
-        rule: SharingRule,
-        location: Boolean = rule.locationEnabled,
-        speed: Boolean = rule.speedEnabled,
-        battery: Boolean = rule.batteryEnabled
-    ) {
-        val old = sharingRules
-        sharingRules = sharingRules.map {
-            if (it.viewerMemberId == rule.viewerMemberId) {
-                it.copy(
-                    locationEnabled = location,
-                    speedEnabled = speed,
-                    batteryEnabled = battery
-                )
-            } else it
+    fun updateRule(rule: SharingRule, location: Boolean = rule.locationEnabled, speed: Boolean = rule.speedEnabled, battery: Boolean = rule.batteryEnabled) {
+        val old = rules
+        rules = rules.map {
+            if (it.viewerMemberId == rule.viewerMemberId) it.copy(
+                locationEnabled = location,
+                speedEnabled = speed,
+                batteryEnabled = battery
+            ) else it
         }
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                FamilyCloud.setSharing(
-                    context,
-                    rule.viewerMemberId,
-                    location,
-                    speed,
-                    battery
-                )
+                FamilyCloud.setSharing(context, rule.viewerMemberId, location, speed, battery)
             }
             result.onFailure {
-                sharingRules = old
-                sharingError = it.message ?: "Could not change sharing"
+                rules = old
+                error = it.message
             }
         }
     }
 
-    LaunchedEffect(Unit) { reloadSharing() }
+    LaunchedEffect(Unit) { reloadRules() }
+
+    val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    val background = if (Build.VERSION.SDK_INT >= 29) ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED else true
+    val notifications = if (Build.VERSION.SDK_INT >= 33) ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED else true
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+        modifier = Modifier.fillMaxSize().background(V7Canvas),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        item {
-            AppHeader(
-                "Privacy & Controls",
-                AppPrefs.profileName(context) + " • " + snapshot.network
-            )
-        }
+        item { V7TopBar("You", "Privacy, automation and device controls", Icons.Default.AccountCircle) }
 
         item {
-            Surface(
-                color = Color.Transparent,
-                shape = RoundedCornerShape(22.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    Modifier.background(
-                        Brush.linearGradient(listOf(Color(0xFF173E70), Color(0xFF2F6FED), Color(0xFF2BB3C0))),
-                        RoundedCornerShape(22.dp)
-                    ).padding(17.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        Modifier.size(46.dp).background(Color.White.copy(alpha = .14f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
+            V7Card {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = CircleShape, color = if (trackingEnabled) V7GreenSoft else V7RedSoft) {
                         Icon(
                             if (trackingEnabled) Icons.Default.LocationOn else Icons.Default.LocationOff,
                             null,
-                            tint = Color.White
+                            tint = if (trackingEnabled) V7Green else V7Red,
+                            modifier = Modifier.padding(10.dp)
                         )
                     }
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            if (trackingEnabled) "Location sharing ON" else "Location sharing paused",
-                            color = Color.White,
-                            fontWeight = FontWeight.Black,
-                            fontSize = 16.sp
-                        )
-                        Text(
-                            if (trackingEnabled) "You can still hide yourself from one specific person below."
-                            else "No new location is being uploaded from this phone.",
-                            color = Color.White.copy(alpha = .78f),
-                            fontSize = 10.sp
-                        )
+                        Text(if (trackingEnabled) "Live sharing is on" else "Live sharing is paused", fontWeight = FontWeight.Black, fontSize = 14.sp)
+                        Text("Master control for this phone", color = V7Muted, fontSize = 9.5.sp)
                     }
-                    Switch(
-                        checked = trackingEnabled,
-                        onCheckedChange = { onToggleTracking() },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Mint
-                        )
-                    )
+                    Switch(checked = trackingEnabled, onCheckedChange = { onToggleTracking() })
                 }
             }
         }
 
-        item { SectionTitle("Who can see me", "Person-by-person control") }
-
-        sharingError?.let { message ->
+        item { V7Section("Who can see me", "Per person") { scope.launch { reloadRules() } } }
+        if (rulesBusy && rules.isEmpty()) {
+            item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
+        } else if (rules.isEmpty()) {
             item {
-                Surface(color = RoseSoft, shape = RoundedCornerShape(14.dp)) {
-                    Row(Modifier.padding(11.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.ErrorOutline, null, tint = Rose, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(7.dp))
-                        Text(message, color = Color(0xFF8E2B3D), fontSize = 10.5.sp, modifier = Modifier.weight(1f))
-                        IconButton(onClick = { scope.launch { reloadSharing() } }) {
-                            Icon(Icons.Default.Refresh, "Retry", modifier = Modifier.size(18.dp))
-                        }
-                    }
-                }
-            }
-        }
-
-        if (sharingBusy && sharingRules.isEmpty()) {
-            item {
-                PremiumCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Text("Loading family privacy controls…", color = Muted, fontSize = 11.sp)
-                    }
-                }
-            }
-        } else if (sharingRules.isEmpty()) {
-            item {
-                PremiumCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconTile(Icons.Default.GroupOff, SurfaceSoft, Muted)
-                        Spacer(Modifier.width(10.dp))
-                        Column {
-                            Text("No other joined member yet", fontWeight = FontWeight.Bold)
-                            Text("Individual controls appear here after someone joins your family.", color = Muted, fontSize = 10.sp)
-                        }
-                    }
+                V7Card {
+                    Text("No other family member yet", fontWeight = FontWeight.Bold)
+                    Text("Person-specific controls appear after someone joins.", color = V7Muted, fontSize = 10.sp)
                 }
             }
         } else {
-            items(sharingRules, key = { it.viewerMemberId }) { rule ->
-                PremiumCard {
+            items(rules, key = { it.viewerMemberId }) { rule ->
+                V7Card {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier.size(42.dp).background(avatarColor(rule.viewerMemberId), CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                rule.viewerName.take(1).uppercase(),
-                                color = Color.White,
-                                fontWeight = FontWeight.Black
-                            )
+                        Box(Modifier.size(40.dp).background(avatarColor(rule.viewerMemberId), CircleShape), contentAlignment = Alignment.Center) {
+                            Text(rule.viewerName.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Black)
                         }
-                        Spacer(Modifier.width(10.dp))
+                        Spacer(Modifier.width(9.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(rule.viewerName, fontWeight = FontWeight.Black, fontSize = 14.sp)
-                            Text(
-                                if (rule.locationEnabled) "Can see your live location" else "Your location is hidden from this person",
-                                color = if (rule.locationEnabled) Muted else Rose,
-                                fontSize = 9.8.sp
-                            )
+                            Text(rule.viewerName, fontWeight = FontWeight.Black, fontSize = 13.sp)
+                            Text(if (rule.locationEnabled) "Can see your live location" else "Your location is hidden", color = if (rule.locationEnabled) V7Muted else V7Red, fontSize = 9.3.sp)
                         }
-                        Switch(
-                            checked = rule.locationEnabled,
-                            onCheckedChange = { updateRule(rule, location = it) }
-                        )
+                        Switch(checked = rule.locationEnabled, onCheckedChange = { updateRule(rule, location = it) })
                     }
-
-                    Spacer(Modifier.height(10.dp))
-
+                    Spacer(Modifier.height(8.dp))
                     Row(
-                        Modifier.fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(13.dp))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(13.dp)).padding(horizontal = 9.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Speed", fontWeight = FontWeight.Bold, fontSize = 10.5.sp, modifier = Modifier.weight(1f))
-                        Switch(
-                            checked = rule.speedEnabled,
-                            enabled = rule.locationEnabled && shareSpeed,
-                            onCheckedChange = { updateRule(rule, speed = it) },
-                            modifier = Modifier.scale(.78f)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text("Battery", fontWeight = FontWeight.Bold, fontSize = 10.5.sp, modifier = Modifier.weight(1f))
-                        Switch(
-                            checked = rule.batteryEnabled,
-                            enabled = shareBattery,
-                            onCheckedChange = { updateRule(rule, battery = it) },
-                            modifier = Modifier.scale(.78f)
-                        )
+                        Text("Speed", fontSize = 9.8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Switch(checked = rule.speedEnabled, enabled = rule.locationEnabled && shareSpeed, onCheckedChange = { updateRule(rule, speed = it) }, modifier = Modifier.scale(.78f))
+                        Text("Battery", fontSize = 9.8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        Switch(checked = rule.batteryEnabled, enabled = shareBattery, onCheckedChange = { updateRule(rule, battery = it) }, modifier = Modifier.scale(.78f))
                     }
                 }
             }
         }
 
-        item { SectionTitle("What this phone shares", "Global controls") }
-
+        item { V7Section("Smart automation") }
         item {
-            PremiumCard {
-                SettingRow(
-                    Icons.Default.Speed,
-                    "Driving speed",
-                    "Current, average and maximum speed",
-                    shareSpeed
-                ) {
+            V7Card {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = RoundedCornerShape(13.dp), color = V7BlueSoft) {
+                        Icon(Icons.Default.Timer, null, tint = V7Blue, modifier = Modifier.padding(9.dp))
+                    }
+                    Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Unscheduled stop alerts", fontWeight = FontWeight.Black, fontSize = 12.5.sp)
+                        Text("If you stop outside saved places, identify the place and notify family.", color = V7Muted, fontSize = 9.3.sp)
+                    }
+                    Switch(
+                        checked = smartStops,
+                        onCheckedChange = {
+                            smartStops = it
+                            prefs.edit().putBoolean("unsaved_stop_alerts", it).apply()
+                        }
+                    )
+                }
+                if (smartStops) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("Notify after", color = V7Muted, fontSize = 9.5.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        listOf(5, 10, 15, 20).forEach { mins ->
+                            FilterChip(
+                                selected = stopMinutes == mins,
+                                onClick = {
+                                    stopMinutes = mins
+                                    prefs.edit().putInt("unsaved_stop_minutes", mins).apply()
+                                },
+                                label = { Text(mins.toString() + " min", fontSize = 9.sp) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item { V7Section("What this phone shares") }
+        item {
+            V7Card {
+                ToggleRow(Icons.Default.Speed, "Driving speed", "Current, average and maximum", shareSpeed) {
                     shareSpeed = it
                     prefs.edit().putBoolean("share_speed", it).apply()
                 }
-                SoftDivider()
-                SettingRow(
-                    Icons.Default.BatteryChargingFull,
-                    "Battery status",
-                    "Battery percentage during travel",
-                    shareBattery
-                ) {
+                HorizontalDivider()
+                ToggleRow(Icons.Default.BatteryChargingFull, "Battery", "Battery percentage during travel", shareBattery) {
                     shareBattery = it
                     prefs.edit().putBoolean("share_battery", it).apply()
                 }
             }
         }
 
-        item { SectionTitle("Speed alert", "Family threshold") }
+        item { V7Section("Permission health") }
         item {
-            PremiumCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconTile(Icons.Default.Speed, AmberSoft, Amber, 38)
-                    Spacer(Modifier.width(9.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("Notify above", fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
-                        Text("Sustained speed only — GPS spikes are filtered.", color = Muted, fontSize = 9.5.sp)
-                    }
-                    StatusPill(speedLimit.toString() + " km/h", PurpleSoft, Purple)
-                }
-                Slider(
-                    value = speedLimit.toFloat(),
-                    onValueChange = { speedLimit = ((it / 5).toInt() * 5).coerceIn(40, 140) },
-                    onValueChangeFinished = { prefs.edit().putInt("speed_limit", speedLimit).apply() },
-                    valueRange = 40f..140f,
-                    steps = 19
-                )
-                Text("This is your family alert threshold, not a legal road-speed claim.", color = Muted, fontSize = 9.5.sp)
-            }
-        }
-
-        item { SectionTitle("Permission health") }
-        item {
-            PremiumCard {
-                HealthRow("Precise location", fine, if (fine) "Ready" else "Required for accurate live map")
-                SoftDivider()
-                HealthRow("Background location", background, if (background) "Ready" else "Needed for reliable trips and place alerts")
-                SoftDivider()
-                HealthRow("Notifications", notification, if (notification) "Ready" else "Enable to receive arrival and trip alerts")
-                SoftDivider()
-                HealthRow("Usage Access", snapshot.usageAccess, if (snapshot.usageAccess) "Optional access granted" else "Optional and off")
-                Spacer(Modifier.height(10.dp))
+            V7Card {
+                PermissionRow("Precise location", fine)
+                PermissionRow("Background location", background)
+                PermissionRow("Notifications", notifications)
+                Spacer(Modifier.height(9.dp))
                 Button(
                     onClick = {
                         context.startActivity(
                             Intent(
                                 Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                android.net.Uri.parse("package:" + context.packageName)
+                                Uri.parse("package:" + context.packageName)
                             ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         )
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp)
-                ) {
-                    Icon(Icons.Default.Settings, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Open Android permissions")
-                }
+                ) { Text("Open Android permissions") }
             }
         }
 
         item {
-            PremiumCard {
-                Text("Family account", fontWeight = FontWeight.Black)
-                Text(
-                    AppPrefs.familyName(context) + " • " + if (AppPrefs.isOwner(context)) "Owner" else "Member",
-                    color = Muted,
-                    fontSize = 10.5.sp
-                )
+            V7Card {
+                Text("Account & data", fontWeight = FontWeight.Black, fontSize = 13.sp)
+                Text(AppPrefs.familyName(context) + " • " + if (AppPrefs.isOwner(context)) "Owner" else "Member", color = V7Muted, fontSize = 9.5.sp)
                 Spacer(Modifier.height(10.dp))
                 OutlinedButton(
                     onClick = onReset,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Rose),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = V7Red),
                     shape = RoundedCornerShape(14.dp)
                 ) {
-                    Icon(Icons.Default.Logout, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Default.Logout, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(5.dp))
                     Text("Leave this family on this phone")
+                }
+            }
+        }
+
+        error?.let {
+            item {
+                Surface(color = V7RedSoft, shape = RoundedCornerShape(14.dp)) {
+                    Text(it, Modifier.padding(11.dp), fontSize = 10.5.sp, color = V7Ink)
                 }
             }
         }
@@ -2211,32 +1847,32 @@ fun PrivacyProfile(
 }
 
 @Composable
-private fun SettingRow(
+private fun ToggleRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     subtitle: String,
     checked: Boolean,
     onChange: (Boolean) -> Unit
 ) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconTile(icon, PurpleSoft, Purple, 38)
-        Spacer(Modifier.width(9.dp))
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Surface(shape = RoundedCornerShape(12.dp), color = V7BlueSoft) {
+            Icon(icon, null, tint = V7Blue, modifier = Modifier.padding(8.dp).size(18.dp))
+        }
+        Spacer(Modifier.width(8.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
-            Text(subtitle, color = Muted, fontSize = 9.5.sp, maxLines = 1)
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
+            Text(subtitle, color = V7Muted, fontSize = 8.8.sp)
         }
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 
 @Composable
-private fun HealthRow(title: String, good: Boolean, detail: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(if (good) Icons.Default.CheckCircle else Icons.Default.ErrorOutline, null, tint = if (good) Mint else Amber, modifier = Modifier.size(19.dp))
+private fun PermissionRow(title: String, ok: Boolean) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(if (ok) Icons.Default.CheckCircle else Icons.Default.ErrorOutline, null, tint = if (ok) V7Green else Color(0xFFF59E0B), modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(8.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.Bold, fontSize = 11.5.sp)
-            Text(detail, color = Muted, fontSize = 9.3.sp)
-        }
+        Text(title, fontWeight = FontWeight.Bold, fontSize = 10.8.sp, modifier = Modifier.weight(1f))
+        Text(if (ok) "Ready" else "Needs attention", color = V7Muted, fontSize = 9.sp)
     }
 }
