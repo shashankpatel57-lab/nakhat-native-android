@@ -43,13 +43,62 @@ object ScanProcessing {
         context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
         var sample = 1
         val maxDim = max(bounds.outWidth, bounds.outHeight)
-        while (maxDim / sample > 2800) sample *= 2
+        while (maxDim / sample > 5000) sample *= 2
         val opts = BitmapFactory.Options().apply {
             inSampleSize = sample
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
         return context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     }
+
+    fun sharpnessScore(file: File): Double {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        var sample = 1
+        val maxDim = max(bounds.outWidth, bounds.outHeight)
+        while (maxDim / sample > 1200) sample *= 2
+        val bitmap = BitmapFactory.decodeFile(
+            file.absolutePath,
+            BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+        ) ?: return 0.0
+
+        if (bitmap.width < 5 || bitmap.height < 5) {
+            bitmap.recycle()
+            return 0.0
+        }
+
+        val step = max(1, min(bitmap.width, bitmap.height) / 420)
+        var count = 0L
+        var sum = 0.0
+        var sumSq = 0.0
+        var y = 2
+        while (y < bitmap.height - 2) {
+            var x = 2
+            while (x < bitmap.width - 2) {
+                val center = pixelLuma(bitmap.getPixel(x, y))
+                val lap = 4 * center -
+                    pixelLuma(bitmap.getPixel(x - 1, y)) -
+                    pixelLuma(bitmap.getPixel(x + 1, y)) -
+                    pixelLuma(bitmap.getPixel(x, y - 1)) -
+                    pixelLuma(bitmap.getPixel(x, y + 1))
+                sum += lap
+                sumSq += lap.toDouble() * lap.toDouble()
+                count++
+                x += step
+            }
+            y += step
+        }
+        bitmap.recycle()
+        if (count == 0L) return 0.0
+        val mean = sum / count
+        return (sumSq / count) - (mean * mean)
+    }
+
+    private fun pixelLuma(color: Int): Int =
+        luma(Color.red(color), Color.green(color), Color.blue(color))
 
     private fun processRows(bitmap: Bitmap, mode: ColorMode, cleanup: Boolean, strength: Int) {
         val w = bitmap.width
@@ -134,7 +183,7 @@ object ScanProcessing {
         val document = PdfDocument()
         images.forEachIndexed { index, file ->
             val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return@forEachIndexed
-            val maxPage = 2400f
+            val maxPage = 3600f
             val scale = min(1f, maxPage / max(bitmap.width, bitmap.height).toFloat())
             val pageW = max(1, (bitmap.width * scale).roundToInt())
             val pageH = max(1, (bitmap.height * scale).roundToInt())
