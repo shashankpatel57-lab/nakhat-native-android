@@ -967,6 +967,47 @@ fun LiveFamilyMap(
             }
         }
 
+        Column(
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SmallFloatingActionButton(
+                onClick = {
+                    followSelected = false
+                    mapView.controller.zoomIn()
+                },
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = Ink
+            ) {
+                Icon(Icons.Default.Add, "Zoom in")
+            }
+            SmallFloatingActionButton(
+                onClick = {
+                    followSelected = false
+                    mapView.controller.zoomOut()
+                },
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = Ink
+            ) {
+                Icon(Icons.Default.Remove, "Zoom out")
+            }
+            SmallFloatingActionButton(
+                onClick = {
+                    followSelected = true
+                    selected?.let { m ->
+                        if (m.lat != null && m.lon != null) {
+                            mapView.controller.setZoom(16.4)
+                            mapView.controller.animateTo(GeoPoint(m.lat, m.lon))
+                        }
+                    }
+                },
+                containerColor = Purple,
+                contentColor = Color.White
+            ) {
+                Icon(Icons.Default.MyLocation, "Recenter")
+            }
+        }
+
         mapError?.let { message ->
             Surface(
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 76.dp, start = 12.dp, end = 12.dp),
