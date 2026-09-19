@@ -1387,7 +1387,7 @@ fun FamilyAndPlacesScreen(
                         if (inviteBusy) {
                             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         } else {
-                            Icon(Icons.Default.Pin, null, Modifier.size(18.dp))
+                            Icon(Icons.Default.Key, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(7.dp))
                             Text("Generate 6-digit code", fontWeight = FontWeight.Bold)
                         }
