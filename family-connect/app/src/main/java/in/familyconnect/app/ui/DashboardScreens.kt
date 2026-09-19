@@ -1243,7 +1243,8 @@ fun FamilyAndPlacesScreen(
     var addPlace by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val invite = remember(cloud) { AppPrefs.inviteCode(context) }
+    var shortInvite by remember { mutableStateOf<ShortInvite?>(null) }
+    var inviteBusy by remember { mutableStateOf(false) }
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val members = cloud?.members.orEmpty()
     val places = cloud?.places ?: AppPrefs.places(context)
@@ -1263,48 +1264,110 @@ fun FamilyAndPlacesScreen(
         item {
             PremiumCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconTile(Icons.Default.PersonAdd, PurpleSoft, Purple)
+                    IconTile(Icons.Default.PersonAddAlt1, SkySoft, Sky)
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("Invite another family member", fontWeight = FontWeight.Black, fontSize = 15.sp)
-                        Text("The new phone pastes this code in Join Family.", color = Muted, fontSize = 10.5.sp)
+                        Text("Invite family member", fontWeight = FontWeight.Black, fontSize = 15.sp)
+                        Text("Use a short one-time code — no long invitation string.", color = Muted, fontSize = 10.5.sp)
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(14.dp)) {
-                    Text(
-                        invite.take(34) + if (invite.length > 34) "…" else "",
-                        Modifier.fillMaxWidth().padding(12.dp),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 10.sp,
-                        maxLines = 2
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+                Spacer(Modifier.height(13.dp))
+
+                if (shortInvite == null) {
                     Button(
-                        onClick = { clipboard.setPrimaryClip(ClipData.newPlainText("Family Connect invitation", invite)) },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(13.dp)
-                    ) {
-                        Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Copy code")
-                    }
-                    OutlinedButton(
+                        enabled = !inviteBusy,
                         onClick = {
-                            val share = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, "Join my " + AppPrefs.familyName(context) + " circle in Family Connect. Invitation code:\n" + invite)
+                            inviteBusy = true
+                            error = null
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) { FamilyCloud.generateShortInvite(context) }
+                                inviteBusy = false
+                                result.onSuccess { shortInvite = it }
+                                    .onFailure { error = it.message ?: "Could not generate invite code" }
                             }
-                            context.startActivity(Intent.createChooser(share, "Share Family Connect invitation"))
                         },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(13.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp)
                     ) {
-                        Icon(Icons.Default.Share, null, Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Share")
+                        if (inviteBusy) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Pin, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(7.dp))
+                            Text("Generate 6-digit code", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                } else {
+                    val invite = shortInvite!!
+                    Surface(
+                        color = SkySoft,
+                        shape = RoundedCornerShape(17.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            Modifier.padding(15.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("JOIN CODE", color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                            Spacer(Modifier.height(3.dp))
+                            Text(
+                                invite.code.chunked(3).joinToString("  "),
+                                color = Navy,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 30.sp,
+                                letterSpacing = 4.sp
+                            )
+                            Text("Valid for 10 minutes • one use", color = Muted, fontSize = 9.5.sp)
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(
+                            onClick = { clipboard.setPrimaryClip(ClipData.newPlainText("Family Connect code", invite.code)) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(13.dp)
+                        ) {
+                            Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Copy")
+                        }
+                        Button(
+                            onClick = {
+                                val share = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(
+                                        Intent.EXTRA_TEXT,
+                                        "Join my " + AppPrefs.familyName(context) + " family in Family Connect.\nCode: " + invite.code +
+                                            "\nThis code is valid for 10 minutes and can be used once."
+                                    )
+                                }
+                                context.startActivity(Intent.createChooser(share, "Share family code"))
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(13.dp)
+                        ) {
+                            Icon(Icons.Default.Share, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Share")
+                        }
+                    }
+                    TextButton(
+                        onClick = {
+                            shortInvite = null
+                            inviteBusy = true
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) { FamilyCloud.generateShortInvite(context) }
+                                inviteBusy = false
+                                result.onSuccess { shortInvite = it }
+                                    .onFailure { error = it.message ?: "Could not refresh code" }
+                            }
+                        },
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Icon(Icons.Default.Refresh, null, Modifier.size(15.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("Generate new code", fontSize = 10.5.sp)
                     }
                 }
             }
