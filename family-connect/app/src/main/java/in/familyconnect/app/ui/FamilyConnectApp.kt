@@ -416,56 +416,75 @@ private fun PremiumBottomBar(selected: AppScreen, onSelect: (AppScreen) -> Unit)
     Box(
         Modifier.fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = 14.dp, vertical = 7.dp)
             .navigationBarsPadding()
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(22.dp),
+            shape = RoundedCornerShape(26.dp),
             color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 10.dp,
-            tonalElevation = 1.dp
+            shadowElevation = 14.dp
         ) {
-            NavigationBar(
-                modifier = Modifier.height(66.dp),
-                containerColor = Color.Transparent,
-                tonalElevation = 0.dp
+            Row(
+                Modifier.fillMaxWidth().height(70.dp).padding(horizontal = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceAround
             ) {
-                val items = listOf(
-                    Triple(AppScreen.Home, Icons.Default.Home, "Home"),
-                    Triple(AppScreen.Map, Icons.Default.Map, "Map"),
-                    Triple(AppScreen.Family, Icons.Default.Groups, "Family"),
-                    Triple(AppScreen.Safety, Icons.Default.Security, "Safety"),
-                    Triple(AppScreen.Profile, Icons.Default.Person, "You")
-                )
-                items.forEach { item ->
-                    NavigationBarItem(
-                        selected = selected == item.first,
-                        onClick = { onSelect(item.first) },
-                        icon = {
-                            Icon(
-                                item.second,
-                                item.third,
-                                modifier = Modifier.size(if (selected == item.first) 23.dp else 20.dp)
-                            )
-                        },
-                        label = {
-                            Text(
-                                item.third,
-                                fontSize = 9.sp,
-                                fontWeight = if (selected == item.first) FontWeight.Black else FontWeight.Medium
-                            )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Purple,
-                            selectedTextColor = Purple,
-                            indicatorColor = PurpleSoft,
-                            unselectedIconColor = Muted,
-                            unselectedTextColor = Muted
+                DockItem(AppScreen.Home, selected, Icons.Default.Home, "Home", onSelect)
+                DockItem(AppScreen.Family, selected, Icons.Default.Groups, "Family", onSelect)
+
+                Surface(
+                    modifier = Modifier.size(52.dp).clickable { onSelect(AppScreen.Map) },
+                    shape = CircleShape,
+                    color = if (selected == AppScreen.Map) Color(0xFF2563EB) else Color(0xFFEFF6FF),
+                    shadowElevation = if (selected == AppScreen.Map) 8.dp else 0.dp
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.Map,
+                            "Map",
+                            tint = if (selected == AppScreen.Map) Color.White else Color(0xFF2563EB),
+                            modifier = Modifier.size(24.dp)
                         )
-                    )
+                    }
                 }
+
+                DockItem(AppScreen.Safety, selected, Icons.Default.HealthAndSafety, "Safety", onSelect)
+                DockItem(AppScreen.Profile, selected, Icons.Default.Person, "You", onSelect)
             }
+        }
+    }
+}
+
+@Composable
+private fun DockItem(
+    screen: AppScreen,
+    selected: AppScreen,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onSelect: (AppScreen) -> Unit
+) {
+    val active = selected == screen
+    Column(
+        modifier = Modifier.width(54.dp).clickable { onSelect(screen) },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            icon,
+            label,
+            tint = if (active) Color(0xFF2563EB) else Color(0xFF64748B),
+            modifier = Modifier.size(if (active) 22.dp else 20.dp)
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            label,
+            fontSize = 8.5.sp,
+            fontWeight = if (active) FontWeight.Black else FontWeight.Medium,
+            color = if (active) Color(0xFF2563EB) else Color(0xFF64748B)
+        )
+        if (active) {
+            Spacer(Modifier.height(3.dp))
+            Box(Modifier.size(4.dp).background(Color(0xFF2563EB), CircleShape))
         }
     }
 }
