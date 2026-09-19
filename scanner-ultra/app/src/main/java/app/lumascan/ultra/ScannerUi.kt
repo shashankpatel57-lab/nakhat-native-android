@@ -73,12 +73,14 @@ fun ScannerApp(
     onAddFolder: (String) -> Unit,
     onAddTag: (String) -> Unit,
     onSettings: (AppSettings) -> Unit,
-    onConnectDrive: () -> Unit
+    onConnectDrive: () -> Unit,
+    onOpenDrive: () -> Unit
 ) {
     var tab by remember { mutableIntStateOf(0) }
     var showScan by remember { mutableStateOf(false) }
     var scanBatch by remember { mutableStateOf(false) }
     var organizeDoc by remember { mutableStateOf<ScanDoc?>(null) }
+    var showAllDocuments by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -88,7 +90,7 @@ fun ScannerApp(
             NavigationBar(containerColor = Color(0xFF10131A), tonalElevation = 0.dp) {
                 NavigationBarItem(
                     selected = tab == 0,
-                    onClick = { tab = 0 },
+                    onClick = { tab = 0; showAllDocuments = false },
                     icon = { Icon(Icons.Rounded.Home, contentDescription = null) },
                     label = { Text("Library") }
                 )
@@ -115,19 +117,36 @@ fun ScannerApp(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
-                0 -> LibraryScreen(
-                    docs = docs,
-                    folders = folders,
-                    tags = tags,
-                    driveConnected = settings.driveTreeUri.isNotBlank(),
-                    onNewScan = { batch -> scanBatch = batch; showScan = true },
-                    onView = onView,
-                    onShare = onShare,
-                    onEmail = onEmail,
-                    onDelete = onDelete,
-                    onOrganize = { organizeDoc = it },
-                    onUpload = onUpload
-                )
+                0 -> if (showAllDocuments) {
+                    LibraryScreen(
+                        docs = docs,
+                        folders = folders,
+                        tags = tags,
+                        driveConnected = settings.driveTreeUri.isNotBlank(),
+                        onNewScan = { batch -> scanBatch = batch; showScan = true },
+                        onView = onView,
+                        onShare = onShare,
+                        onEmail = onEmail,
+                        onDelete = onDelete,
+                        onOrganize = { organizeDoc = it },
+                        onUpload = onUpload
+                    )
+                } else {
+                    HomeScreen(
+                        docs = docs,
+                        folders = folders,
+                        tags = tags,
+                        driveConnected = settings.driveTreeUri.isNotBlank(),
+                        onNewScan = { batch -> scanBatch = batch; showScan = true },
+                        onViewAll = { showAllDocuments = true },
+                        onView = onView,
+                        onShare = onShare,
+                        onEmail = onEmail,
+                        onDelete = onDelete,
+                        onOrganize = { organizeDoc = it },
+                        onUpload = onUpload
+                    )
+                }
                 1 -> FoldersScreen(
                     docs = docs,
                     folders = folders,
@@ -138,7 +157,8 @@ fun ScannerApp(
                 else -> SettingsScreen(
                     settings = settings,
                     onSettings = onSettings,
-                    onConnectDrive = onConnectDrive
+                    onConnectDrive = onConnectDrive,
+                    onOpenDrive = onOpenDrive
                 )
             }
 
@@ -184,6 +204,100 @@ fun ScannerApp(
                 organizeDoc = null
             }
         )
+    }
+}
+
+@Composable
+fun HomeScreen(
+    docs: List<ScanDoc>,
+    folders: List<ScanFolder>,
+    tags: List<ScanTag>,
+    driveConnected: Boolean,
+    onNewScan: (Boolean) -> Unit,
+    onViewAll: () -> Unit,
+    onView: (ScanDoc) -> Unit,
+    onShare: (ScanDoc, OutputFormat) -> Unit,
+    onEmail: (ScanDoc) -> Unit,
+    onDelete: (ScanDoc) -> Unit,
+    onOrganize: (ScanDoc) -> Unit,
+    onUpload: (ScanDoc) -> Unit
+) {
+    val recent = remember(docs) { docs.sortedByDescending { it.createdAt }.take(3) }
+
+    LazyColumn(
+        Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 18.dp)
+    ) {
+        item {
+            Text("SCANTANTRA", color = UiPalette.ink, fontSize = 29.sp, fontWeight = FontWeight.Black)
+            Text("Document scanner", color = UiPalette.muted, fontSize = 13.sp)
+        }
+
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = { onNewScan(false) },
+                    modifier = Modifier.weight(1f).height(56.dp),
+                    shape = RoundedCornerShape(17.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = UiPalette.accent,
+                        contentColor = Color(0xFF06231B)
+                    )
+                ) { Text("Scan page", fontWeight = FontWeight.Bold) }
+
+                FilledTonalButton(
+                    onClick = { onNewScan(true) },
+                    modifier = Modifier.weight(1f).height(56.dp),
+                    shape = RoundedCornerShape(17.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = UiPalette.surface2,
+                        contentColor = UiPalette.ink
+                    )
+                ) { Text("Batch scan", fontWeight = FontWeight.Bold) }
+            }
+        }
+
+        item {
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Recent scans", color = UiPalette.ink, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = onViewAll) { Text("View all (" + docs.size + ")") }
+            }
+        }
+
+        if (recent.isEmpty()) {
+            item { EmptyLibrary(hasDocs = false, onScan = { onNewScan(false) }) }
+        } else {
+            items(recent, key = { it.id }) { doc ->
+                DocumentCard(
+                    doc = doc,
+                    folder = folders.firstOrNull { it.id == doc.folderId },
+                    tagCatalog = tags,
+                    driveConnected = driveConnected,
+                    onView = { onView(doc) },
+                    onShare = { format -> onShare(doc, format) },
+                    onEmail = { onEmail(doc) },
+                    onDelete = { onDelete(doc) },
+                    onOrganize = { onOrganize(doc) },
+                    onUpload = { onUpload(doc) }
+                )
+            }
+        }
+
+        item {
+            FilledTonalButton(
+                onClick = onViewAll,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = UiPalette.surface2,
+                    contentColor = UiPalette.ink
+                )
+            ) {
+                Text("All documents", fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 
@@ -622,7 +736,8 @@ fun SmallEmpty(text: String) {
 fun SettingsScreen(
     settings: AppSettings,
     onSettings: (AppSettings) -> Unit,
-    onConnectDrive: () -> Unit
+    onConnectDrive: () -> Unit,
+    onOpenDrive: () -> Unit
 ) {
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp),
@@ -725,13 +840,20 @@ fun SettingsScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            "Uses Android's secure document provider. Your Google password is never stored by LumaScan.",
+                            if (settings.driveTreeUri.isBlank())
+                                "1. Open Google Drive and sign in. 2. Return here and choose a Drive folder."
+                            else
+                                "A Drive folder is selected. SCANTANTRA stores folder access, never your Google password.",
                             color = UiPalette.muted,
-                            fontSize = 12.sp
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
                         )
                     }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onOpenDrive) { Text("Open Drive") }
                     TextButton(onClick = onConnectDrive) {
-                        Text(if (settings.driveTreeUri.isBlank()) "Connect" else "Change")
+                        Text(if (settings.driveTreeUri.isBlank()) "Choose Drive folder" else "Change folder")
                     }
                 }
                 HorizontalDivider(color = Color(0xFF2A3040), modifier = Modifier.padding(vertical = 10.dp))
