@@ -1084,7 +1084,10 @@ fun LiveFamilyMap(
                             modifier = Modifier.clickable {
                                 selectedId = member.id
                                 followSelected = true
-                                if (mapView.zoomLevelDouble < 16.0) mapView.controller.setZoom(16.4)
+                                mapView.controller.setZoom(16.4)
+                                if (member.lat != null && member.lon != null) {
+                                    mapView.controller.animateTo(GeoPoint(member.lat, member.lon))
+                                }
                             },
                             color = if (active) Purple else MaterialTheme.colorScheme.surface.copy(alpha = .97f),
                             contentColor = if (active) Color.White else MaterialTheme.colorScheme.onSurface,
