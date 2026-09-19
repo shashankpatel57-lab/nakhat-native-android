@@ -8,7 +8,9 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
@@ -449,7 +451,7 @@ private fun PremiumBottomBar(selected: AppScreen, onSelect: (AppScreen) -> Unit)
                     }
                 }
 
-                DockItem(AppScreen.Safety, selected, Icons.Default.HealthAndSafety, "Safety", onSelect)
+                DockItem(AppScreen.Safety, selected, Icons.Default.Security, "Safety", onSelect)
                 DockItem(AppScreen.Profile, selected, Icons.Default.Person, "You", onSelect)
             }
         }
