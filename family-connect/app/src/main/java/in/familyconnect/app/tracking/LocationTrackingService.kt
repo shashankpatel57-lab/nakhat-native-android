@@ -391,14 +391,26 @@ class LocationTrackingService : Service() {
     }
 
     private fun showAlert(id: Int, title: String, body: String) {
+        val openApp = PendingIntent.getActivity(
+            this,
+            id,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("open_family_alert", true)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(
             id,
             NotificationCompat.Builder(this, "family_alerts")
                 .setSmallIcon(R.drawable.ic_launcher)
                 .setContentTitle(title)
                 .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
                 .setAutoCancel(true)
+                .setContentIntent(openApp)
                 .build()
         )
     }
