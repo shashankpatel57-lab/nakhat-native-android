@@ -68,6 +68,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
@@ -745,9 +746,25 @@ fun LiveFamilyMap(
         GeoPoint(26.8467, 80.9462)
     }
 
+    val cleanTileSource = remember {
+        XYTileSource(
+            "FamilyLight",
+            0,
+            20,
+            256,
+            ".png",
+            arrayOf(
+                "https://a.basemaps.cartocdn.com/light_all/",
+                "https://b.basemaps.cartocdn.com/light_all/",
+                "https://c.basemaps.cartocdn.com/light_all/"
+            ),
+            "© OpenStreetMap contributors © CARTO"
+        )
+    }
+
     val mapView = remember {
         MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+            setTileSource(cleanTileSource)
             setUseDataConnection(true)
             setMultiTouchControls(true)
             setBuiltInZoomControls(false)
@@ -1037,6 +1054,19 @@ fun LiveFamilyMap(
                     )
                 }
             }
+        }
+
+        Surface(
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 184.dp),
+            color = Color.White.copy(alpha = .78f),
+            shape = RoundedCornerShape(5.dp)
+        ) {
+            Text(
+                "© OSM © CARTO",
+                Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                fontSize = 7.sp,
+                color = Color(0xFF68768A)
+            )
         }
 
         Column(
