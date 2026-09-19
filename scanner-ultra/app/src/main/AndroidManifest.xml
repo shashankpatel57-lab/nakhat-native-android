@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:allowBackup="false" android:label="LumaScan Ultra" android:theme="@style/Theme.LumaScan">
+    <application android:allowBackup="false" android:label="SCANTANTRA" android:icon="@drawable/scantantra_mark" android:roundIcon="@drawable/scantantra_mark" android:theme="@style/Theme.LumaScan">
         <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
