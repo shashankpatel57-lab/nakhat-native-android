@@ -25,6 +25,11 @@ jobs:
           base64 -d ultrascan-src.tar.gz.b64 > ultrascan-src.tar.gz
           tar -xzf ultrascan-src.tar.gz -C scanner-app
 
+      - name: Apply UltraScan compiler fixes
+        working-directory: scanner-app
+        shell: bash
+        run: patch -p1 < ../ultrascan-appui.patch
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
