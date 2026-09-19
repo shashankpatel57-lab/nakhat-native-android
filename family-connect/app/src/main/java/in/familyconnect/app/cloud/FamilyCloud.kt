@@ -37,7 +37,9 @@ data class CloudMember(
     val routeUpdatedAt: Long,
     val locationVisible: Boolean,
     val speedVisible: Boolean,
-    val batteryVisible: Boolean
+    val batteryVisible: Boolean,
+    val altitudeM: Float?,
+    val floorEstimate: Int?
 )
 
 data class CloudEvent(
@@ -61,6 +63,11 @@ data class ResolvedDestination(
     val name: String,
     val lat: Double,
     val lon: Double
+)
+
+data class ResolvedPlaceName(
+    val name: String,
+    val detail: String
 )
 
 data class ShortInvite(
@@ -181,6 +188,60 @@ object FamilyCloud {
         )
     }
 
+    fun history(context: Context, limit: Int = 120): Result<List<CloudEvent>> = runCatching {
+        val response = call(
+            authPayload(context, "get_history")
+                .put("memberId", AppPrefs.memberId(context))
+                .put("limit", limit)
+        )
+        val arr = response.optJSONArray("events") ?: JSONArray()
+        buildList {
+            for (i in 0 until arr.length()) {
+                val e = arr.optJSONObject(i) ?: continue
+                add(
+                    CloudEvent(
+                        id = e.optString("id"),
+                        memberId = e.optString("member_id"),
+                        memberName = e.optString("member_name", "Family"),
+                        type = e.optString("event_type"),
+                        title = e.optString("title"),
+                        body = e.optString("body"),
+                        createdAt = parseIsoMillis(e.optString("created_at"))
+                    )
+                )
+            }
+        }
+    }
+
+    fun clearHistory(context: Context, familyWide: Boolean): Result<Unit> = runCatching {
+        call(
+            authPayload(context, "clear_history")
+                .put("memberId", AppPrefs.memberId(context))
+                .put("scope", if (familyWide) "family" else "mine")
+        )
+    }
+
+    fun removeMember(context: Context, targetMemberId: String): Result<CloudState> = runCatching {
+        val response = call(
+            authPayload(context, "remove_member")
+                .put("memberId", AppPrefs.memberId(context))
+                .put("targetMemberId", targetMemberId)
+        )
+        parseState(response.getJSONObject("state"), AppPrefs.familyName(context))
+    }
+
+    fun reverseGeocode(context: Context, lat: Double, lon: Double): Result<ResolvedPlaceName> = runCatching {
+        val response = call(
+            authPayload(context, "reverse_geocode")
+                .put("latitude", lat)
+                .put("longitude", lon)
+        )
+        ResolvedPlaceName(
+            name = response.optString("name", "Unknown place"),
+            detail = response.optString("detail", "")
+        )
+    }
+
     fun resolveMapShare(context: Context, sharedText: String): Result<ResolvedDestination> = runCatching {
         val response = call(
             authPayload(context, "resolve_map_share")
@@ -297,6 +358,8 @@ object FamilyCloud {
                     .put("remainingM", if (trip.active) trip.remainingM ?: JSONObject.NULL else JSONObject.NULL)
                     .put("etaMinutes", if (trip.active) trip.etaMinutes ?: JSONObject.NULL else JSONObject.NULL)
                     .put("tripActive", trip.active)
+                    .put("altitudeM", tracking.getFloat("altitude_m", Float.NaN).takeIf { !it.isNaN() } ?: JSONObject.NULL)
+                    .put("floorEstimate", tracking.getInt("floor_estimate", Int.MIN_VALUE).takeIf { it != Int.MIN_VALUE } ?: JSONObject.NULL)
             )
 
         val response = call(payload)
@@ -390,7 +453,9 @@ object FamilyCloud {
                         routeUpdatedAt = parseIsoMillis(state.optString("route_updated_at")),
                         locationVisible = state.optBoolean("location_visible", true),
                         speedVisible = state.optBoolean("speed_visible", true),
-                        batteryVisible = state.optBoolean("battery_visible", true)
+                        batteryVisible = state.optBoolean("battery_visible", true),
+                        altitudeM = nullableDouble(state, "altitude_m")?.toFloat(),
+                        floorEstimate = nullableDouble(state, "floor_estimate")?.toInt()
                     )
                 )
             }
