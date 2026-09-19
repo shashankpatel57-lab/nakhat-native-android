@@ -38,6 +38,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -227,13 +228,13 @@ fun HomeDashboard(
             ) {
                 Column(
                     Modifier.background(
-                        Brush.linearGradient(listOf(Color(0xFF17182D), Color(0xFF302D69), Color(0xFF645BE9))),
+                        Brush.linearGradient(listOf(Color(0xFF173E70), Color(0xFF2F6FED), Color(0xFF2BB3C0))),
                         RoundedCornerShape(27.dp)
                     ).padding(20.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("FAMILY NOW", color = Color(0xFFC7C3FF), fontSize = 10.5.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                            Text("FAMILY NOW", color = Color(0xFFD6F3F6), fontSize = 10.5.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                             Spacer(Modifier.height(5.dp))
                             Text(
                                 if (trackingEnabled) "Live sharing is active" else "Location sharing is paused",
@@ -571,18 +572,20 @@ private fun CloudMemberCard(member: CloudMember, isMe: Boolean, onOpenMap: () ->
                     }
                 }
                 Text(
-                    member.motion + " • " + ageText(member.updatedAt),
-                    color = Muted,
+                    if (!member.locationVisible) "Location sharing paused for you"
+                    else member.motion + " • " + ageText(member.updatedAt),
+                    color = if (!member.locationVisible) Rose else Muted,
                     fontSize = 10.5.sp
                 )
             }
-            if (member.speed > 0) StatusPill(member.speed.toString() + " km/h", PurpleSoft, Purple)
+            if (!member.locationVisible) StatusPill("Private", RoseSoft, Rose)
+            else if (member.speedVisible && member.speed > 0) StatusPill(member.speed.toString() + " km/h", PurpleSoft, Purple)
         }
         Spacer(Modifier.height(11.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            SmallMetric("Battery", if (member.battery >= 0) member.battery.toString() + "%" else "Private")
-            SmallMetric("Avg speed", member.avgSpeed.toString() + " km/h")
-            SmallMetric("Max speed", member.maxSpeed.toString() + " km/h")
+            SmallMetric("Battery", if (member.batteryVisible && member.battery >= 0) member.battery.toString() + "%" else "Private")
+            SmallMetric("Avg speed", if (member.speedVisible) member.avgSpeed.toString() + " km/h" else "Private")
+            SmallMetric("Max speed", if (member.speedVisible) member.maxSpeed.toString() + " km/h" else "Private")
             SmallMetric("Updated", ageText(member.updatedAt))
         }
         member.destinationName?.let { destination ->
