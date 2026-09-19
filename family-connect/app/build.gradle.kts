@@ -9,11 +9,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.familyconnect.app"
+        applicationId = "in.familyconnect.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "7.0.0-rebuild"
+        versionCode = 8
+        versionName = "7.0.1-aab"
     }
 
     signingConfigs {
