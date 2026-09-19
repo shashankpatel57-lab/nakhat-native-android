@@ -702,6 +702,7 @@ fun LiveFamilyMap(
     val locatedMembers = members.filter { it.lat != null && it.lon != null }
     var selectedId by remember { mutableStateOf<String?>(null) }
     var followSelected by remember { mutableStateOf(true) }
+    var cleanMapStyle by rememberSaveable { mutableStateOf(true) }
     var mapError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(locatedMembers.map { it.id }) {
@@ -773,6 +774,11 @@ fun LiveFamilyMap(
             controller.setZoom(if (locatedMembers.isEmpty()) 12.5 else 16.4)
             controller.setCenter(initialCenter)
         }
+    }
+
+    LaunchedEffect(cleanMapStyle) {
+        mapView.setTileSource(if (cleanMapStyle) cleanTileSource else TileSourceFactory.MAPNIK)
+        mapView.invalidate()
     }
 
     DisposableEffect(lifecycleOwner, mapView) {
@@ -951,6 +957,16 @@ fun LiveFamilyMap(
                         },
                         color = Muted,
                         fontSize = 9.5.sp
+                    )
+                }
+
+                IconButton(onClick = {
+                    cleanMapStyle = !cleanMapStyle
+                }) {
+                    Icon(
+                        Icons.Default.Layers,
+                        if (cleanMapStyle) "Use standard map" else "Use clean map",
+                        tint = if (cleanMapStyle) Sky else Muted
                     )
                 }
 
