@@ -12,6 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.documentfile.provider.DocumentFile
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
@@ -327,7 +329,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun uploadToDrive(doc: ScanDoc, s: AppSettings): Boolean = try {
+    private fun uploadToDrive(doc: ScanDoc, s: AppSettings): Boolean {
+        return try {
         val root = DocumentFile.fromTreeUri(this, Uri.parse(s.driveTreeUri)) ?: return false
         val safeName = SmartNamer.safePart(doc.title).ifBlank { "Scanned_Document" }
 
@@ -364,8 +367,9 @@ class MainActivity : ComponentActivity() {
             }
         }
         true
-    } catch (_: Exception) {
-        false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
