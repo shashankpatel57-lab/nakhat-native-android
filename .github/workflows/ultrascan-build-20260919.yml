@@ -1,0 +1,53 @@
+name: Build UltraScan APK
+
+on:
+  push:
+    branches: [ultrascan-build-20260919]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Restore UltraScan source bundle
+        shell: bash
+        run: |
+          mkdir -p scanner-app
+          cat ultrascan-src.part* > ultrascan-src.tar.gz.b64
+          base64 -d ultrascan-src.tar.gz.b64 > ultrascan-src.tar.gz
+          tar -xzf ultrascan-src.tar.gz -C scanner-app
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 9.6
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Build debug APK
+        working-directory: scanner-app
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Publish APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UltraScan-debug-apk
+          path: scanner-app/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
