@@ -1,0 +1,41 @@
+name: LumaScan Ultra APK
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'scanner-ultra/**'
+      - '.github/workflows/scanner-ultra-apk-pr.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Build debug APK
+        working-directory: scanner-ultra
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Stage APK
+        run: cp scanner-ultra/app/build/outputs/apk/debug/app-debug.apk LumaScan-Ultra-v1.0-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LumaScan-Ultra-APK
+          path: LumaScan-Ultra-v1.0-debug.apk
+          if-no-files-found: error
+          retention-days: 14
