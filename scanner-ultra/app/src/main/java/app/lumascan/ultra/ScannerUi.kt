@@ -74,6 +74,7 @@ fun ScannerApp(
     onAddTag: (String) -> Unit,
     onSettings: (AppSettings) -> Unit,
     onConnectDrive: () -> Unit,
+    onDisconnectDrive: () -> Unit,
     onOpenDrive: () -> Unit,
     onBackupAll: () -> Unit
 ) {
@@ -123,7 +124,7 @@ fun ScannerApp(
                         docs = docs,
                         folders = folders,
                         tags = tags,
-                        driveConnected = settings.driveTreeUri.isNotBlank(),
+                        driveConnected = settings.driveApiConnected,
                         onNewScan = { batch -> scanBatch = batch; showScan = true },
                         onView = onView,
                         onShare = onShare,
@@ -137,7 +138,7 @@ fun ScannerApp(
                         docs = docs,
                         folders = folders,
                         tags = tags,
-                        driveConnected = settings.driveTreeUri.isNotBlank(),
+                        driveConnected = settings.driveApiConnected,
                         onNewScan = { batch -> scanBatch = batch; showScan = true },
                         onViewAll = { showAllDocuments = true },
                         onView = onView,
@@ -159,6 +160,7 @@ fun ScannerApp(
                     settings = settings,
                     onSettings = onSettings,
                     onConnectDrive = onConnectDrive,
+                    onDisconnectDrive = onDisconnectDrive,
                     onOpenDrive = onOpenDrive,
                     onBackupAll = onBackupAll
                 )
@@ -739,6 +741,7 @@ fun SettingsScreen(
     settings: AppSettings,
     onSettings: (AppSettings) -> Unit,
     onConnectDrive: () -> Unit,
+    onDisconnectDrive: () -> Unit,
     onOpenDrive: () -> Unit,
     onBackupAll: () -> Unit
 ) {
@@ -836,19 +839,22 @@ fun SettingsScreen(
         item {
             SettingsCard {
                 Text(
-                    if (settings.driveTreeUri.isBlank())
-                        "No backup folder selected"
+                    if (settings.driveApiConnected)
+                        "Google Drive connected"
                     else
-                        "Backup folder: " + settings.driveFolderName.ifBlank { "Selected Drive folder" },
+                        "Google Drive not connected",
                     color = UiPalette.ink,
                     fontWeight = FontWeight.Bold
                 )
+
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (settings.driveTreeUri.isBlank())
-                        "Android blocks apps from selecting the Drive root. Tap Set backup folder, open My Drive, create or open a subfolder such as SCANTANTRA Backup, then tap Use this folder."
-                    else
-                        "This folder has passed SCANTANTRA's write test. New scans can be backed up automatically, and failed uploads are retried when internet access returns.",
+                    if (settings.driveApiConnected) {
+                        val account = settings.driveAccountEmail.ifBlank { "authorized Google account" }
+                        "Account: " + account + "\nFolder: SCANTANTRA Backup\nNew scans are uploaded directly through the Google Drive API."
+                    } else {
+                        "Connect once with your Google account. SCANTANTRA will create its own “SCANTANTRA Backup” folder in My Drive — no Android folder picker is used."
+                    },
                     color = UiPalette.muted,
                     fontSize = 12.sp,
                     lineHeight = 18.sp
@@ -859,21 +865,29 @@ fun SettingsScreen(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    TextButton(onClick = onConnectDrive) {
-                        Text(if (settings.driveTreeUri.isBlank()) "Set backup folder" else "Change backup folder")
-                    }
-                    TextButton(onClick = onOpenDrive) { Text("Open Drive") }
-                    if (settings.driveTreeUri.isNotBlank()) {
+                    if (!settings.driveApiConnected) {
+                        Button(onClick = onConnectDrive) {
+                            Text("Connect Google Drive")
+                        }
+                    } else {
                         TextButton(onClick = onBackupAll) { Text("Backup all now") }
+                        TextButton(onClick = onOpenDrive) { Text("Open Drive") }
+                        TextButton(onClick = onDisconnectDrive) {
+                            Text("Disconnect", color = UiPalette.danger)
+                        }
                     }
                 }
 
-                HorizontalDivider(color = Color(0xFF2A3040), modifier = Modifier.padding(vertical = 10.dp))
+                HorizontalDivider(
+                    color = Color(0xFF2A3040),
+                    modifier = Modifier.padding(vertical = 10.dp)
+                )
+
                 SettingSwitch(
                     title = "Automatic backup",
-                    subtitle = "After each scan, queue the PDF/JPG for Drive. WorkManager retries in the background if the device is offline.",
+                    subtitle = "Queue every completed PDF/JPG for Google Drive. Background retries run when internet access returns.",
                     checked = settings.autoDriveUpload,
-                    enabled = settings.driveTreeUri.isNotBlank(),
+                    enabled = settings.driveApiConnected && settings.driveFolderId.isNotBlank(),
                     onChecked = { onSettings(settings.copy(autoDriveUpload = it)) }
                 )
             }
