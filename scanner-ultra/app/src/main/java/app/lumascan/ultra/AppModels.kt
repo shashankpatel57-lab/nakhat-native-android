@@ -33,8 +33,9 @@ data class AppSettings(
     val cleanupStrength: Int = 65,
     val ocrEnabled: Boolean = true,
     val autoDriveUpload: Boolean = false,
-    val driveTreeUri: String = "",
-    val driveFolderName: String = "",
+    val driveApiConnected: Boolean = false,
+    val driveFolderId: String = "",
+    val driveAccountEmail: String = "",
     val smartEmailSubject: Boolean = true,
     val jpegQuality: Int = 97
 )
@@ -135,8 +136,9 @@ object AppStore {
             cleanupStrength = p.getInt("cleanupStrength", 65),
             ocrEnabled = p.getBoolean("ocr", true),
             autoDriveUpload = p.getBoolean("autoDrive", false),
-            driveTreeUri = p.getString("driveUri", "") ?: "",
-            driveFolderName = p.getString("driveFolderName", "") ?: "",
+            driveApiConnected = p.getBoolean("driveApiConnected", false),
+            driveFolderId = p.getString("driveFolderId", "") ?: "",
+            driveAccountEmail = p.getString("driveAccountEmail", "") ?: "",
             smartEmailSubject = p.getBoolean("emailSubject", true),
             jpegQuality = p.getInt("jpegQuality", 97)
         )
@@ -151,8 +153,9 @@ object AppStore {
             .putInt("cleanupStrength", s.cleanupStrength)
             .putBoolean("ocr", s.ocrEnabled)
             .putBoolean("autoDrive", s.autoDriveUpload)
-            .putString("driveUri", s.driveTreeUri)
-            .putString("driveFolderName", s.driveFolderName)
+            .putBoolean("driveApiConnected", s.driveApiConnected)
+            .putString("driveFolderId", s.driveFolderId)
+            .putString("driveAccountEmail", s.driveAccountEmail)
             .putBoolean("emailSubject", s.smartEmailSubject)
             .putInt("jpegQuality", s.jpegQuality)
             .apply()
