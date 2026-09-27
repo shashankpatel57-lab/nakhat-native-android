@@ -1,8 +1,6 @@
 package app.lumascan.ultra
 
 import android.content.Context
-import android.net.Uri
-import androidx.documentfile.provider.DocumentFile
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -14,9 +12,9 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.google.android.gms.tasks.Tasks
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.util.concurrent.TimeUnit
 
 class DriveBackupWorker(
@@ -26,18 +24,25 @@ class DriveBackupWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val settings = AppStore.loadSettings(applicationContext)
-        if (!settings.autoDriveUpload || settings.driveTreeUri.isBlank()) {
+        if (!settings.autoDriveUpload ||
+            !settings.driveApiConnected ||
+            settings.driveFolderId.isBlank()
+        ) {
             return@withContext Result.success()
         }
 
-        val root = runCatching {
-            DocumentFile.fromTreeUri(applicationContext, Uri.parse(settings.driveTreeUri))
-        }.getOrNull() ?: return@withContext Result.retry()
-
-        if (!root.exists() || !root.canWrite() || !root.isDirectory) {
+        val authResult = try {
+            Tasks.await(DriveAuth.client(applicationContext).authorize(DriveAuth.request()))
+        } catch (_: Exception) {
             return@withContext Result.retry()
         }
 
+        if (authResult.hasResolution()) {
+            // User interaction is required again; foreground Settings will handle it.
+            return@withContext Result.retry()
+        }
+
+        val token = authResult.accessToken ?: return@withContext Result.retry()
         val requestedId = inputData.getString(KEY_DOC_ID)
         val docs = AppStore.loadDocs(applicationContext)
             .filter { requestedId.isNullOrBlank() || it.id == requestedId }
@@ -48,12 +53,21 @@ class DriveBackupWorker(
 
         var failed = false
         docs.forEach { doc ->
-            if (BackupLedger.isBackedUp(applicationContext, settings.driveTreeUri, doc)) {
+            if (BackupLedger.isBackedUp(applicationContext, settings.driveFolderId, doc)) {
                 return@forEach
             }
-            val ok = DriveBackupStorage.upload(applicationContext, root, doc)
+
+            val ok = DriveRestApi.uploadDocument(
+                token = token,
+                folderId = settings.driveFolderId,
+                doc = doc
+            )
             if (ok) {
-                BackupLedger.markBackedUp(applicationContext, settings.driveTreeUri, doc)
+                BackupLedger.markBackedUp(
+                    applicationContext,
+                    settings.driveFolderId,
+                    doc
+                )
             } else {
                 failed = true
             }
@@ -76,6 +90,7 @@ class DriveBackupWorker(
                 .setConstraints(constraints())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
+
             WorkManager.getInstance(context).enqueueUniqueWork(
                 "scantantra_drive_doc_" + docId,
                 ExistingWorkPolicy.REPLACE,
@@ -88,6 +103,7 @@ class DriveBackupWorker(
                 .setConstraints(constraints())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
+
             WorkManager.getInstance(context).enqueueUniqueWork(
                 "scantantra_drive_backup_all",
                 ExistingWorkPolicy.REPLACE,
@@ -99,6 +115,7 @@ class DriveBackupWorker(
             val request = PeriodicWorkRequestBuilder<DriveBackupWorker>(6, TimeUnit.HOURS)
                 .setConstraints(constraints())
                 .build()
+
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 PERIODIC_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
@@ -112,66 +129,22 @@ class DriveBackupWorker(
     }
 }
 
-object DriveBackupStorage {
-    fun upload(context: Context, root: DocumentFile, doc: ScanDoc): Boolean {
-        return try {
-        val safeName = SmartNamer.safePart(doc.title).ifBlank { "Scanned_Document" }
-
-        if (doc.preferredFormat == OutputFormat.PDF || doc.imagePaths.isEmpty()) {
-            val source = File(doc.pdfPath)
-            if (!source.exists()) return false
-            val fileName = safeName + ".pdf"
-            root.findFile(fileName)?.delete()
-            val dest = root.createFile("application/pdf", fileName) ?: return false
-            context.contentResolver.openOutputStream(dest.uri, "w")?.use { out ->
-                source.inputStream().use { input -> input.copyTo(out) }
-            } ?: return false
-        } else if (doc.imagePaths.size == 1) {
-            val source = File(doc.imagePaths.first())
-            if (!source.exists()) return false
-            val fileName = safeName + ".jpg"
-            root.findFile(fileName)?.delete()
-            val dest = root.createFile("image/jpeg", fileName) ?: return false
-            context.contentResolver.openOutputStream(dest.uri, "w")?.use { out ->
-                source.inputStream().use { input -> input.copyTo(out) }
-            } ?: return false
-        } else {
-            val folder = root.findFile(safeName)?.takeIf { it.isDirectory }
-                ?: root.createDirectory(safeName)
-                ?: return false
-
-            doc.imagePaths.forEachIndexed { index, path ->
-                val source = File(path)
-                if (!source.exists()) return@forEachIndexed
-                val fileName = "page_" + (index + 1).toString().padStart(3, '0') + ".jpg"
-                folder.findFile(fileName)?.delete()
-                val dest = folder.createFile("image/jpeg", fileName) ?: return false
-                context.contentResolver.openOutputStream(dest.uri, "w")?.use { out ->
-                    source.inputStream().use { input -> input.copyTo(out) }
-                } ?: return false
-            }
-        }
-        true
-        } catch (_: Exception) {
-            false
-        }
-    }
-}
-
 object BackupLedger {
-    private const val PREFS = "drive_backup_ledger_v1"
+    private const val PREFS = "drive_backup_ledger_v2"
 
-    private fun key(treeUri: String, doc: ScanDoc): String {
-        val signature = doc.pdfPath + "|" + doc.title + "|" + doc.pageCount + "|" + doc.preferredFormat.name
-        return treeUri.hashCode().toString() + ":" + doc.id + ":" + signature.hashCode()
+    private fun key(folderId: String, doc: ScanDoc): String {
+        val signature = doc.pdfPath + "|" + doc.title + "|" +
+            doc.pageCount + "|" + doc.preferredFormat.name
+        return folderId.hashCode().toString() + ":" +
+            doc.id + ":" + signature.hashCode()
     }
 
-    fun isBackedUp(context: Context, treeUri: String, doc: ScanDoc): Boolean =
+    fun isBackedUp(context: Context, folderId: String, doc: ScanDoc): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(key(treeUri, doc), false)
+            .getBoolean(key(folderId, doc), false)
 
-    fun markBackedUp(context: Context, treeUri: String, doc: ScanDoc) {
+    fun markBackedUp(context: Context, folderId: String, doc: ScanDoc) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putBoolean(key(treeUri, doc), true).apply()
+            .edit().putBoolean(key(folderId, doc), true).apply()
     }
 }
