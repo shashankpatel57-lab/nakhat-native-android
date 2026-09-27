@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         uri ?: return@registerForActivityResult
+
         try {
             contentResolver.takePersistableUriPermission(
                 uri,
@@ -58,9 +59,48 @@ class MainActivity : ComponentActivity() {
             )
         } catch (_: Exception) {
         }
-        settings = settings.copy(driveTreeUri = uri.toString(), autoDriveUpload = true)
-        AppStore.saveSettings(this, settings)
-        toast("Drive folder connected")
+
+        processing = true
+        io.execute {
+            val root = runCatching { DocumentFile.fromTreeUri(this, uri) }.getOrNull()
+            val testOk = if (root != null && root.isDirectory && root.canWrite()) {
+                runCatching {
+                    val testName = ".scantantra_write_test_" + System.currentTimeMillis() + ".txt"
+                    val testFile = root.createFile("text/plain", testName) ?: error("Cannot create test file")
+                    contentResolver.openOutputStream(testFile.uri, "w")?.use { out ->
+                        out.write("SCANTANTRA backup folder verification".toByteArray())
+                        out.flush()
+                    } ?: error("Cannot write test file")
+                    testFile.delete()
+                    true
+                }.getOrDefault(false)
+            } else {
+                false
+            }
+
+            runOnUiThread {
+                processing = false
+                if (testOk && root != null) {
+                    settings = settings.copy(
+                        driveTreeUri = uri.toString(),
+                        driveFolderName = root.name ?: "SCANTANTRA Backup",
+                        autoDriveUpload = true
+                    )
+                    AppStore.saveSettings(this, settings)
+                    DriveBackupWorker.ensurePeriodic(this)
+                    DriveBackupWorker.enqueueAll(this)
+                    toast("Drive backup folder verified. Automatic backup is on.")
+                } else {
+                    settings = settings.copy(
+                        driveTreeUri = "",
+                        driveFolderName = "",
+                        autoDriveUpload = false
+                    )
+                    AppStore.saveSettings(this, settings)
+                    toast("That folder is not writable. In My Drive, create or open a subfolder such as SCANTANTRA Backup.")
+                }
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,6 +110,9 @@ class MainActivity : ComponentActivity() {
         folders = AppStore.loadFolders(this)
         tags = AppStore.loadTags(this)
         settings = AppStore.loadSettings(this)
+        if (settings.autoDriveUpload && settings.driveTreeUri.isNotBlank()) {
+            DriveBackupWorker.ensurePeriodic(this)
+        }
 
         setContent {
             LumaTheme {
@@ -88,15 +131,13 @@ class MainActivity : ComponentActivity() {
                     onUpload = ::manualDriveUpload,
                     onAddFolder = ::addFolder,
                     onAddTag = ::addTag,
-                    onSettings = {
-                        settings = it
-                        AppStore.saveSettings(this, it)
-                    },
+                    onSettings = ::applySettings,
                     onConnectDrive = {
-                        toast("In the folder picker, open the side menu, choose Google Drive, then select a folder.")
-                        drivePicker.launch(null)
+                        val initial = settings.driveTreeUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
+                        drivePicker.launch(initial)
                     },
-                    onOpenDrive = ::openGoogleDrive
+                    onOpenDrive = ::openGoogleDrive,
+                    onBackupAll = ::backupAllNow
                 )
             }
         }
@@ -254,10 +295,8 @@ class MainActivity : ComponentActivity() {
         AppStore.saveDocs(this, docs)
 
         if (settingsSnapshot.autoDriveUpload && settingsSnapshot.driveTreeUri.isNotBlank()) {
-            io.execute {
-                val ok = uploadToDrive(updated, settingsSnapshot)
-                runOnUiThread { toast(if (ok) "Saved to Drive" else "Drive upload failed") }
-            }
+            DriveBackupWorker.enqueueDocument(this, updated.id)
+            DriveBackupWorker.ensurePeriodic(this)
         }
     }
 
@@ -353,55 +392,31 @@ class MainActivity : ComponentActivity() {
 
     private fun manualDriveUpload(doc: ScanDoc) {
         if (settings.driveTreeUri.isBlank()) {
-            toast("Connect a Google Drive folder in Settings first")
+            toast("Set a Google Drive backup folder in Settings first")
             return
         }
-        io.execute {
-            val ok = uploadToDrive(doc, settings)
-            runOnUiThread { toast(if (ok) "Saved to Drive" else "Drive upload failed") }
-        }
+        DriveBackupWorker.enqueueDocument(this, doc.id)
+        toast("Drive backup queued")
     }
 
-    private fun uploadToDrive(doc: ScanDoc, s: AppSettings): Boolean {
-        return try {
-        val root = DocumentFile.fromTreeUri(this, Uri.parse(s.driveTreeUri)) ?: return false
-        val safeName = SmartNamer.safePart(doc.title).ifBlank { "Scanned_Document" }
-
-        if (doc.preferredFormat == OutputFormat.PDF || doc.imagePaths.isEmpty()) {
-            val source = File(doc.pdfPath)
-            if (!source.exists()) return false
-            val fileName = safeName + ".pdf"
-            root.findFile(fileName)?.delete()
-            val dest = root.createFile("application/pdf", fileName) ?: return false
-            contentResolver.openOutputStream(dest.uri)?.use { out ->
-                source.inputStream().use { it.copyTo(out) }
-            } ?: return false
-        } else if (doc.imagePaths.size == 1) {
-            val source = File(doc.imagePaths.first())
-            val fileName = safeName + ".jpg"
-            root.findFile(fileName)?.delete()
-            val dest = root.createFile("image/jpeg", fileName) ?: return false
-            contentResolver.openOutputStream(dest.uri)?.use { out ->
-                source.inputStream().use { it.copyTo(out) }
-            } ?: return false
-        } else {
-            val folder = root.findFile(safeName)?.takeIf { it.isDirectory }
-                ?: root.createDirectory(safeName)
-                ?: return false
-            doc.imagePaths.forEachIndexed { index, path ->
-                val source = File(path)
-                if (!source.exists()) return@forEachIndexed
-                val fileName = "page_" + (index + 1).toString().padStart(3, '0') + ".jpg"
-                folder.findFile(fileName)?.delete()
-                val dest = folder.createFile("image/jpeg", fileName) ?: return@forEachIndexed
-                contentResolver.openOutputStream(dest.uri)?.use { out ->
-                    source.inputStream().use { it.copyTo(out) }
-                }
-            }
+    private fun backupAllNow() {
+        if (settings.driveTreeUri.isBlank()) {
+            toast("Set a Google Drive backup folder first")
+            return
         }
-        true
-        } catch (_: Exception) {
-            false
+        DriveBackupWorker.enqueueAll(this)
+        DriveBackupWorker.ensurePeriodic(this)
+        toast("All documents queued for Drive backup")
+    }
+
+    private fun applySettings(updated: AppSettings) {
+        settings = updated
+        AppStore.saveSettings(this, updated)
+        if (updated.autoDriveUpload && updated.driveTreeUri.isNotBlank()) {
+            DriveBackupWorker.ensurePeriodic(this)
+            DriveBackupWorker.enqueueAll(this)
+        } else {
+            DriveBackupWorker.cancelPeriodic(this)
         }
     }
 
