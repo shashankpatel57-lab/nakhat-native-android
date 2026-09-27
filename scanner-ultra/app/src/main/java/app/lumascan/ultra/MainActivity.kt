@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
             finishDriveConnection(authorization)
         } catch (e: ApiException) {
             processing = false
-            toast("Google Drive authorization failed: " + (e.message ?: "unknown error"))
+            showDriveAuthError(e)
         }
     }
 
@@ -403,11 +403,23 @@ class MainActivity : ComponentActivity() {
             }
             .addOnFailureListener { error ->
                 processing = false
-                toast(
-                    "Google Drive authorization failed. Check the app's Google OAuth setup. " +
-                        (error.message ?: "")
-                )
+                showDriveAuthError(error)
             }
+    }
+
+    private fun showDriveAuthError(error: Throwable) {
+        val raw = error.message.orEmpty()
+        val unregistered = raw.contains("UNREGISTER", ignoreCase = true) ||
+            raw.contains("DEVELOPER_ERROR", ignoreCase = true)
+
+        if (unregistered) {
+            toast(
+                "Google OAuth is not registered for this APK. Package: " +
+                    DriveAuth.OAUTH_PACKAGE + " · SHA-1: " + DriveAuth.OAUTH_SHA1
+            )
+        } else {
+            toast("Google Drive authorization failed: " + raw.ifBlank { "unknown error" })
+        }
     }
 
     private fun finishDriveConnection(authorization: AuthorizationResult) {
