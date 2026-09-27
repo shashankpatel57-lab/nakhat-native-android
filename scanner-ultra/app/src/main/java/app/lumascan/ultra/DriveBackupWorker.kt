@@ -113,7 +113,8 @@ class DriveBackupWorker(
 }
 
 object DriveBackupStorage {
-    fun upload(context: Context, root: DocumentFile, doc: ScanDoc): Boolean = try {
+    fun upload(context: Context, root: DocumentFile, doc: ScanDoc): Boolean {
+        return try {
         val safeName = SmartNamer.safePart(doc.title).ifBlank { "Scanned_Document" }
 
         if (doc.preferredFormat == OutputFormat.PDF || doc.imagePaths.isEmpty()) {
@@ -151,8 +152,9 @@ object DriveBackupStorage {
             }
         }
         true
-    } catch (_: Exception) {
-        false
+        } catch (_: Exception) {
+            false
+        }
     }
 }
 
