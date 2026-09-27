@@ -34,6 +34,7 @@ data class AppSettings(
     val ocrEnabled: Boolean = true,
     val autoDriveUpload: Boolean = false,
     val driveTreeUri: String = "",
+    val driveFolderName: String = "",
     val smartEmailSubject: Boolean = true,
     val jpegQuality: Int = 97
 )
@@ -135,6 +136,7 @@ object AppStore {
             ocrEnabled = p.getBoolean("ocr", true),
             autoDriveUpload = p.getBoolean("autoDrive", false),
             driveTreeUri = p.getString("driveUri", "") ?: "",
+            driveFolderName = p.getString("driveFolderName", "") ?: "",
             smartEmailSubject = p.getBoolean("emailSubject", true),
             jpegQuality = p.getInt("jpegQuality", 97)
         )
@@ -150,6 +152,7 @@ object AppStore {
             .putBoolean("ocr", s.ocrEnabled)
             .putBoolean("autoDrive", s.autoDriveUpload)
             .putString("driveUri", s.driveTreeUri)
+            .putString("driveFolderName", s.driveFolderName)
             .putBoolean("emailSubject", s.smartEmailSubject)
             .putInt("jpegQuality", s.jpegQuality)
             .apply()
