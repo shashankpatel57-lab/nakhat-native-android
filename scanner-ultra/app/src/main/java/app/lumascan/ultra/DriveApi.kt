@@ -15,11 +15,11 @@ import java.net.URLEncoder
 
 object DriveAuth {
     val scopes: List<Scope> = listOf(
-        Scope("https://www.googleapis.com/auth/drive.file"),
-        Scope("openid"),
-        Scope("email"),
-        Scope("profile")
+        Scope("https://www.googleapis.com/auth/drive.file")
     )
+
+    const val OAUTH_PACKAGE = "app.lumascan.ultra"
+    const val OAUTH_SHA1 = "42:60:C5:94:A1:C8:C5:B8:E0:9B:6C:3A:7F:E5:0C:95:8E:7D:BE:59"
 
     fun request(): AuthorizationRequest =
         AuthorizationRequest.builder()
@@ -43,7 +43,7 @@ object DriveRestApi {
     fun completeConnection(token: String): DriveConnection {
         val folderId = findBackupFolder(token) ?: createFolder(token, BACKUP_FOLDER_NAME, null)
         verifyWriteAccess(token, folderId)
-        return DriveConnection(folderId, loadEmail(token))
+        return DriveConnection(folderId, "")
     }
 
     fun uploadDocument(token: String, folderId: String, doc: ScanDoc): Boolean {
@@ -142,15 +142,6 @@ object DriveRestApi {
         } finally {
             temp.delete()
         }
-    }
-
-    private fun loadEmail(token: String): String = try {
-        val json = JSONObject(
-            http(token, "GET", "https://www.googleapis.com/oauth2/v3/userinfo")
-        )
-        json.optString("email", "")
-    } catch (_: Exception) {
-        ""
     }
 
     private fun uploadFileResumable(
