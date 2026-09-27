@@ -11,9 +11,10 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
-import androidx.documentfile.provider.DocumentFile
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import com.google.android.gms.auth.api.identity.AuthorizationResult
+import com.google.android.gms.common.api.ApiException
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
@@ -47,59 +48,16 @@ class MainActivity : ComponentActivity() {
         saveScan(scan)
     }
 
-    private val drivePicker = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        uri ?: return@registerForActivityResult
-
+    private val driveAuthorizationLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
         try {
-            contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-        } catch (_: Exception) {
-        }
-
-        processing = true
-        io.execute {
-            val root = runCatching { DocumentFile.fromTreeUri(this, uri) }.getOrNull()
-            val testOk = if (root != null && root.isDirectory && root.canWrite()) {
-                runCatching {
-                    val testName = ".scantantra_write_test_" + System.currentTimeMillis() + ".txt"
-                    val testFile = root.createFile("text/plain", testName) ?: error("Cannot create test file")
-                    contentResolver.openOutputStream(testFile.uri, "w")?.use { out ->
-                        out.write("SCANTANTRA backup folder verification".toByteArray())
-                        out.flush()
-                    } ?: error("Cannot write test file")
-                    testFile.delete()
-                    true
-                }.getOrDefault(false)
-            } else {
-                false
-            }
-
-            runOnUiThread {
-                processing = false
-                if (testOk && root != null) {
-                    settings = settings.copy(
-                        driveTreeUri = uri.toString(),
-                        driveFolderName = root.name ?: "SCANTANTRA Backup",
-                        autoDriveUpload = true
-                    )
-                    AppStore.saveSettings(this, settings)
-                    DriveBackupWorker.ensurePeriodic(this)
-                    DriveBackupWorker.enqueueAll(this)
-                    toast("Drive backup folder verified. Automatic backup is on.")
-                } else {
-                    settings = settings.copy(
-                        driveTreeUri = "",
-                        driveFolderName = "",
-                        autoDriveUpload = false
-                    )
-                    AppStore.saveSettings(this, settings)
-                    toast("That folder is not writable. In My Drive, create or open a subfolder such as SCANTANTRA Backup.")
-                }
-            }
+            val authorization = DriveAuth.client(this)
+                .getAuthorizationResultFromIntent(result.data)
+            finishDriveConnection(authorization)
+        } catch (e: ApiException) {
+            processing = false
+            toast("Google Drive authorization failed: " + (e.message ?: "unknown error"))
         }
     }
 
@@ -110,7 +68,7 @@ class MainActivity : ComponentActivity() {
         folders = AppStore.loadFolders(this)
         tags = AppStore.loadTags(this)
         settings = AppStore.loadSettings(this)
-        if (settings.autoDriveUpload && settings.driveTreeUri.isNotBlank()) {
+        if (settings.autoDriveUpload && settings.driveApiConnected && settings.driveFolderId.isNotBlank()) {
             DriveBackupWorker.ensurePeriodic(this)
         }
 
@@ -132,10 +90,8 @@ class MainActivity : ComponentActivity() {
                     onAddFolder = ::addFolder,
                     onAddTag = ::addTag,
                     onSettings = ::applySettings,
-                    onConnectDrive = {
-                        val initial = settings.driveTreeUri.takeIf { it.isNotBlank() }?.let(Uri::parse)
-                        drivePicker.launch(initial)
-                    },
+                    onConnectDrive = ::connectGoogleDrive,
+                    onDisconnectDrive = ::disconnectGoogleDrive,
                     onOpenDrive = ::openGoogleDrive,
                     onBackupAll = ::backupAllNow
                 )
@@ -294,7 +250,10 @@ class MainActivity : ComponentActivity() {
         docs = docs.map { if (it.id == updated.id) updated else it }
         AppStore.saveDocs(this, docs)
 
-        if (settingsSnapshot.autoDriveUpload && settingsSnapshot.driveTreeUri.isNotBlank()) {
+        if (settingsSnapshot.autoDriveUpload &&
+            settingsSnapshot.driveApiConnected &&
+            settingsSnapshot.driveFolderId.isNotBlank()
+        ) {
             DriveBackupWorker.enqueueDocument(this, updated.id)
             DriveBackupWorker.ensurePeriodic(this)
         }
@@ -391,8 +350,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun manualDriveUpload(doc: ScanDoc) {
-        if (settings.driveTreeUri.isBlank()) {
-            toast("Set a Google Drive backup folder in Settings first")
+        if (!settings.driveApiConnected || settings.driveFolderId.isBlank()) {
+            toast("Connect Google Drive in Settings first")
             return
         }
         DriveBackupWorker.enqueueDocument(this, doc.id)
@@ -400,8 +359,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun backupAllNow() {
-        if (settings.driveTreeUri.isBlank()) {
-            toast("Set a Google Drive backup folder first")
+        if (!settings.driveApiConnected || settings.driveFolderId.isBlank()) {
+            toast("Connect Google Drive first")
             return
         }
         DriveBackupWorker.enqueueAll(this)
@@ -412,12 +371,91 @@ class MainActivity : ComponentActivity() {
     private fun applySettings(updated: AppSettings) {
         settings = updated
         AppStore.saveSettings(this, updated)
-        if (updated.autoDriveUpload && updated.driveTreeUri.isNotBlank()) {
+        if (updated.autoDriveUpload &&
+            updated.driveApiConnected &&
+            updated.driveFolderId.isNotBlank()
+        ) {
             DriveBackupWorker.ensurePeriodic(this)
             DriveBackupWorker.enqueueAll(this)
         } else {
             DriveBackupWorker.cancelPeriodic(this)
         }
+    }
+
+    private fun connectGoogleDrive() {
+        processing = true
+        DriveAuth.client(this)
+            .authorize(DriveAuth.request())
+            .addOnSuccessListener { authorization ->
+                if (authorization.hasResolution()) {
+                    val pending = authorization.pendingIntent
+                    if (pending == null) {
+                        processing = false
+                        toast("Google Drive authorization is unavailable")
+                    } else {
+                        driveAuthorizationLauncher.launch(
+                            IntentSenderRequest.Builder(pending.intentSender).build()
+                        )
+                    }
+                } else {
+                    finishDriveConnection(authorization)
+                }
+            }
+            .addOnFailureListener { error ->
+                processing = false
+                toast(
+                    "Google Drive authorization failed. Check the app's Google OAuth setup. " +
+                        (error.message ?: "")
+                )
+            }
+    }
+
+    private fun finishDriveConnection(authorization: AuthorizationResult) {
+        val token = authorization.accessToken
+        if (token.isNullOrBlank()) {
+            processing = false
+            toast("Google did not return Drive access. Please try Connect again.")
+            return
+        }
+
+        io.execute {
+            try {
+                val connection = DriveRestApi.completeConnection(token)
+                runOnUiThread {
+                    processing = false
+                    settings = settings.copy(
+                        driveApiConnected = true,
+                        driveFolderId = connection.folderId,
+                        driveAccountEmail = connection.accountEmail,
+                        autoDriveUpload = true
+                    )
+                    AppStore.saveSettings(this, settings)
+                    DriveBackupWorker.ensurePeriodic(this)
+                    DriveBackupWorker.enqueueAll(this)
+                    toast("Google Drive connected. Automatic backup is on.")
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    processing = false
+                    toast(
+                        "Drive connection failed: " +
+                            (e.message ?: "Google Drive API is not available for this app")
+                    )
+                }
+            }
+        }
+    }
+
+    private fun disconnectGoogleDrive() {
+        settings = settings.copy(
+            autoDriveUpload = false,
+            driveApiConnected = false,
+            driveFolderId = "",
+            driveAccountEmail = ""
+        )
+        AppStore.saveSettings(this, settings)
+        DriveBackupWorker.cancelPeriodic(this)
+        toast("Google Drive disconnected")
     }
 
     private fun openGoogleDrive() {
