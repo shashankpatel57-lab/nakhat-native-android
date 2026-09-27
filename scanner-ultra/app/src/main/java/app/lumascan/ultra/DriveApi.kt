@@ -46,7 +46,8 @@ object DriveRestApi {
         return DriveConnection(folderId, loadEmail(token))
     }
 
-    fun uploadDocument(token: String, folderId: String, doc: ScanDoc): Boolean = try {
+    fun uploadDocument(token: String, folderId: String, doc: ScanDoc): Boolean {
+        return try {
         val safeName = SmartNamer.safePart(doc.title).ifBlank { "Scanned_Document" }
 
         if (doc.preferredFormat == OutputFormat.PDF || doc.imagePaths.isEmpty()) {
@@ -85,8 +86,9 @@ object DriveRestApi {
             }
         }
         true
-    } catch (_: Exception) {
-        false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun findBackupFolder(token: String): String? =
