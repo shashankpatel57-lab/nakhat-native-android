@@ -7,7 +7,7 @@ android {
     compileSdk = 37
     defaultConfig {
         applicationId = "app.lumascan.ultra"
-        minSdk = 23
+        minSdk = 24
         targetSdk = 36
         versionCode = 5
         versionName = "1.4.0"
